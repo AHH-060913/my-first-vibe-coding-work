@@ -16,7 +16,7 @@ import {
 import { api } from "./api";
 import { LineChart, SectorBarChart } from "./components/Charts";
 import { formatAmount, formatDateTime, formatPct, probability } from "./format";
-import type { Announcement, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, ThemeKey } from "./types";
+import type { Announcement, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, StockSearchResult, ThemeKey } from "./types";
 
 type Section = "overview" | "sectors" | "stocks" | "rankings" | "news" | "predictions" | "watchlist";
 type RankingType = "gainers" | "losers" | "turnover" | "volume_ratio" | "hot_sector" | "model_score";
@@ -48,6 +48,8 @@ const rankingLabels: Record<RankingType, string> = {
   model_score: "模型评分"
 };
 
+const SAMPLE_POOL_KEY = "a-share-sample-pool";
+
 export default function App() {
   const [section, setSection] = useState<Section>("overview");
   const [theme, setTheme] = useState<ThemeKey | "">("");
@@ -62,6 +64,9 @@ export default function App() {
   const [announcements, setAnnouncements] = useState<ListResponse<Announcement> | null>(null);
   const [predictions, setPredictions] = useState<ListResponse<Prediction> | null>(null);
   const [watchlist, setWatchlist] = useState<(ListResponse<Stock> & { codes: string[] }) | null>(null);
+  const [samplePool, setSamplePool] = useState<StockDetail[]>(loadSamplePool);
+  const [searchResults, setSearchResults] = useState<StockSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
   const [selectedCode, setSelectedCode] = useState("300750");
   const [detail, setDetail] = useState<StockDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -124,6 +129,10 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    const localDetail = samplePool.find((item) => item.quote.code === selectedCode);
+    if (localDetail) {
+      setDetail(localDetail);
+    }
     api
       .stockDetail(selectedCode)
       .then((payload) => {
@@ -135,7 +144,60 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedCode]);
+  }, [samplePool, selectedCode]);
+
+  const persistSamplePool = useCallback((next: StockDetail[]) => {
+    const unique = Array.from(new Map(next.map((item) => [item.quote.code, item])).values());
+    setSamplePool(unique);
+    window.localStorage.setItem(SAMPLE_POOL_KEY, JSON.stringify(unique));
+  }, []);
+
+  const runOnlineSearch = useCallback(async () => {
+    const value = query.trim();
+    if (!value) return;
+    setSearching(true);
+    setError(null);
+    try {
+      const payload = await api.searchStocks(value);
+      setSearchResults(payload.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "在线搜索失败");
+    } finally {
+      setSearching(false);
+    }
+  }, [query]);
+
+  const addSearchResult = useCallback(
+    async (result: StockSearchResult) => {
+      setSearching(true);
+      setError(null);
+      try {
+        const resolved = await api.resolveStock(result.code);
+        persistSamplePool([resolved, ...samplePool]);
+        setSelectedCode(resolved.quote.code);
+        setSection("stocks");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "添加股票失败");
+      } finally {
+        setSearching(false);
+      }
+    },
+    [persistSamplePool, samplePool]
+  );
+
+  const handleSelectStock = useCallback((code: string) => {
+    setSelectedCode(code);
+    setSection("stocks");
+  }, []);
+
+  const poolStocks = useMemo(() => samplePool.map((item) => item.quote), [samplePool]);
+  const displayStocks = useMemo(() => mergeStocks(stocks?.items ?? [], poolStocks), [poolStocks, stocks]);
+  const displayPredictions = useMemo(() => mergePredictions(predictions?.items ?? [], samplePool), [predictions, samplePool]);
+  const displayRankings = useMemo(
+    () => mergeRankingItems(rankings?.items ?? [], poolStocks, samplePool, rankingType),
+    [poolStocks, rankings, rankingType, samplePool]
+  );
+  const displayWatchlist = useMemo(() => mergeStocks(watchlist?.items ?? [], poolStocks), [poolStocks, watchlist]);
 
   const selectedThemeName = theme ? themeLabels[theme] : "全市场";
   const freshness = overview?.updated_at || stocks?.updated_at || sectors?.updated_at;
@@ -177,13 +239,41 @@ export default function App() {
           <div className="toolbar">
             <label className="searchBox">
               <Search size={18} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索代码、名称、新闻关键词" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") runOnlineSearch();
+                }}
+                placeholder="搜索任意A股代码或名称"
+              />
             </label>
+            <button className="searchAction" onClick={runOnlineSearch} disabled={searching}>
+              {searching ? "搜索中" : "在线搜索"}
+            </button>
             <button className="iconButton" onClick={loadAll} title="刷新数据" aria-label="刷新数据">
               <RefreshCw size={18} className={loading ? "spin" : ""} />
             </button>
           </div>
         </header>
+
+        {searchResults.length > 0 && (
+          <div className="searchResults">
+            <div className="panelHead">
+              <h2>搜索结果</h2>
+              <span>添加后进入全局样本池</span>
+            </div>
+            <div className="searchResultList">
+              {searchResults.map((item) => (
+                <button key={`${item.market}-${item.code}`} onClick={() => addSearchResult(item)}>
+                  <strong>{item.name}</strong>
+                  <span>{item.code} · {item.market} · {item.source}</span>
+                  <em>添加</em>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="notice">
           <ShieldAlert size={16} />
@@ -202,14 +292,14 @@ export default function App() {
         </div>
 
         {error && <div className="error">{error}</div>}
-        {section === "overview" && <OverviewPage overview={overview} stocks={stocks?.items ?? []} sectors={overview?.hot_sectors ?? sectors?.items ?? []} />}
-        {section === "sectors" && <SectorsPage sectors={sectors?.items ?? []} stocks={stocks?.items ?? []} onSelectStock={setSelectedCode} />}
+        {section === "overview" && <OverviewPage overview={overview} stocks={displayStocks} sectors={overview?.hot_sectors ?? sectors?.items ?? []} onSelectStock={handleSelectStock} />}
+        {section === "sectors" && <SectorsPage sectors={sectors?.items ?? []} stocks={displayStocks} onSelectStock={handleSelectStock} />}
         {section === "stocks" && (
           <StocksPage
-            stocks={stocks?.items ?? []}
+            stocks={displayStocks}
             detail={detail}
             watchCodes={watchlist?.codes ?? []}
-            onSelectStock={setSelectedCode}
+            onSelectStock={handleSelectStock}
             onAddWatch={async (code) => {
               await api.addWatch(code);
               setWatchlist(await api.watchlist());
@@ -220,16 +310,16 @@ export default function App() {
             }}
           />
         )}
-        {section === "rankings" && <RankingsPage rankingType={rankingType} setRankingType={setRankingType} rankings={rankings?.items ?? []} />}
+        {section === "rankings" && <RankingsPage rankingType={rankingType} setRankingType={setRankingType} rankings={displayRankings} onSelectStock={handleSelectStock} />}
         {section === "news" && <NewsPage news={news?.items ?? []} announcements={announcements?.items ?? []} />}
-        {section === "predictions" && <PredictionsPage horizon={horizon} setHorizon={setHorizon} predictions={predictions?.items ?? []} />}
-        {section === "watchlist" && <WatchlistPage stocks={watchlist?.items ?? []} codes={watchlist?.codes ?? []} onSelectStock={setSelectedCode} />}
+        {section === "predictions" && <PredictionsPage horizon={horizon} setHorizon={setHorizon} predictions={displayPredictions} onSelectStock={handleSelectStock} />}
+        {section === "watchlist" && <WatchlistPage stocks={displayWatchlist} codes={[...(watchlist?.codes ?? []), ...poolStocks.map((item) => item.code)]} onSelectStock={handleSelectStock} />}
       </main>
     </div>
   );
 }
 
-function OverviewPage({ overview, stocks, sectors }: { overview: Overview | null; stocks: Stock[]; sectors: Sector[] }) {
+function OverviewPage({ overview, stocks, sectors, onSelectStock }: { overview: Overview | null; stocks: Stock[]; sectors: Sector[]; onSelectStock: (code: string) => void }) {
   const topStocks = stocks.slice(0, 6);
   const amount = overview?.total_amount ?? stocks.reduce((sum, item) => sum + (item.amount || 0), 0);
   const breadth = overview?.breadth ?? { up: 0, down: 0, flat: 0, total: 0 };
@@ -284,7 +374,7 @@ function OverviewPage({ overview, stocks, sectors }: { overview: Overview | null
           <h2>强势个股</h2>
           <span>按涨跌幅</span>
         </div>
-        <StockTable stocks={topStocks} compact />
+        <StockTable stocks={topStocks} compact onSelectStock={onSelectStock} />
       </div>
     </section>
   );
@@ -367,6 +457,8 @@ function StocksPage({
               <span>PE <b>{detail.quote.pe.toFixed(1)}</b></span>
               <span>PB <b>{detail.quote.pb.toFixed(1)}</b></span>
             </div>
+            {detail.quote.stale && <div className="staleBadge">当前展示最近可用数据，请关注更新时间</div>}
+            <ProfileBlock detail={detail} />
             <PredictionMini predictions={detail.predictions} />
             <RelatedList title="相关新闻" items={detail.news.map((item) => item.title)} />
             <RelatedList title="公告" items={detail.announcements.map((item) => item.title)} />
@@ -382,11 +474,13 @@ function StocksPage({
 function RankingsPage({
   rankingType,
   setRankingType,
-  rankings
+  rankings,
+  onSelectStock
 }: {
   rankingType: RankingType;
   setRankingType: (type: RankingType) => void;
   rankings: Array<Stock | Sector | Prediction>;
+  onSelectStock: (code: string) => void;
 }) {
   return (
     <section className="panel">
@@ -400,7 +494,7 @@ function RankingsPage({
           ))}
         </div>
       </div>
-      {rankingType === "hot_sector" ? <SectorTable sectors={rankings as Sector[]} /> : rankingType === "model_score" ? <PredictionTable predictions={rankings as Prediction[]} /> : <StockTable stocks={rankings as Stock[]} />}
+      {rankingType === "hot_sector" ? <SectorTable sectors={rankings as Sector[]} /> : rankingType === "model_score" ? <PredictionTable predictions={rankings as Prediction[]} onSelectStock={onSelectStock} /> : <StockTable stocks={rankings as Stock[]} onSelectStock={onSelectStock} />}
     </section>
   );
 }
@@ -440,7 +534,7 @@ function NewsPage({ news, announcements }: { news: NewsItem[]; announcements: An
   );
 }
 
-function PredictionsPage({ horizon, setHorizon, predictions }: { horizon: number; setHorizon: (horizon: number) => void; predictions: Prediction[] }) {
+function PredictionsPage({ horizon, setHorizon, predictions, onSelectStock }: { horizon: number; setHorizon: (horizon: number) => void; predictions: Prediction[]; onSelectStock: (code: string) => void }) {
   const top = useMemo(() => predictions.slice(0, 4), [predictions]);
   return (
     <section className="pageGrid">
@@ -474,7 +568,7 @@ function PredictionsPage({ horizon, setHorizon, predictions }: { horizon: number
         </div>
       </div>
       <div className="panel full">
-        <PredictionTable predictions={predictions} />
+        <PredictionTable predictions={predictions} onSelectStock={onSelectStock} />
       </div>
     </section>
   );
@@ -489,6 +583,29 @@ function WatchlistPage({ stocks, codes, onSelectStock }: { stocks: Stock[]; code
       </div>
       {stocks.length ? <StockTable stocks={stocks} onSelectStock={onSelectStock} /> : <EmptyState text="在个股行情页点击星标加入自选" />}
     </section>
+  );
+}
+
+function ProfileBlock({ detail }: { detail: StockDetail }) {
+  const profile = detail.profile;
+  return (
+    <div className="profileBlock">
+      <h3>公司背景</h3>
+      {profile ? (
+        <>
+          <div className="profileGrid">
+            <span>公司全称 <b>{profile.full_name || detail.quote.name}</b></span>
+            <span>所属行业 <b>{profile.industry || detail.quote.sector || "暂无"}</b></span>
+            <span>上市日期 <b>{profile.listing_date || "暂无"}</b></span>
+            <span>地区 <b>{profile.region || "暂无"}</b></span>
+          </div>
+          <p>{profile.main_business || "暂无主营业务资料"}</p>
+          <small>{profile.source} · {formatDateTime(profile.updated_at)}</small>
+        </>
+      ) : (
+        <span>暂无公司背景资料</span>
+      )}
+    </div>
   );
 }
 
@@ -530,7 +647,17 @@ function StockTable({
             return (
               <tr key={item.code} onClick={() => onSelectStock?.(item.code)}>
                 <td>{item.code}</td>
-                <td><strong>{item.name}</strong></td>
+                <td>
+                  <button
+                    className="nameButton"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectStock?.(item.code);
+                    }}
+                  >
+                    {item.name}
+                  </button>
+                </td>
                 <td>{themeLabels[item.theme] ?? "市场"} / {item.sector || "未分组"}</td>
                 <td>{item.price?.toFixed(2)}</td>
                 <td className={item.change_pct >= 0 ? "up" : "down"}>{formatPct(item.change_pct)}</td>
@@ -595,7 +722,7 @@ function SectorTable({ sectors }: { sectors: Sector[] }) {
   );
 }
 
-function PredictionTable({ predictions }: { predictions: Prediction[] }) {
+function PredictionTable({ predictions, onSelectStock }: { predictions: Prediction[]; onSelectStock?: (code: string) => void }) {
   return (
     <div className="tableWrap">
       <table>
@@ -614,9 +741,19 @@ function PredictionTable({ predictions }: { predictions: Prediction[] }) {
         </thead>
         <tbody>
           {predictions.map((item) => (
-            <tr key={`${item.code}-${item.horizon}`}>
+            <tr key={`${item.code}-${item.horizon}`} onClick={() => onSelectStock?.(item.code)}>
               <td>{item.code}</td>
-              <td><strong>{item.name}</strong></td>
+              <td>
+                <button
+                  className="nameButton"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelectStock?.(item.code);
+                  }}
+                >
+                  {item.name}
+                </button>
+              </td>
               <td>{item.horizon}日</td>
               <td>{probability(item.up_probability)}</td>
               <td>{probability(item.excess_probability)}</td>
@@ -663,6 +800,40 @@ function EmptyState({ text }: { text: string }) {
       <span>{text}</span>
     </div>
   );
+}
+
+function loadSamplePool(): StockDetail[] {
+  try {
+    const raw = window.localStorage.getItem(SAMPLE_POOL_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as StockDetail[];
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.quote?.code) : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergeStocks(primary: Stock[], extra: Stock[]) {
+  return Array.from(new Map([...extra, ...primary].map((item) => [item.code, item])).values());
+}
+
+function mergePredictions(primary: Prediction[], pool: StockDetail[]) {
+  const extra = pool.flatMap((item) => item.predictions ?? []);
+  return Array.from(new Map([...extra, ...primary].map((item) => [`${item.code}-${item.horizon}`, item])).values()).sort(
+    (a, b) => b.excess_probability - a.excess_probability
+  );
+}
+
+function mergeRankingItems(items: Array<Stock | Sector | Prediction>, poolStocks: Stock[], pool: StockDetail[], rankingType: RankingType) {
+  if (rankingType === "hot_sector") return items;
+  if (rankingType === "model_score") return mergePredictions(items as Prediction[], pool);
+  const merged = mergeStocks(items as Stock[], poolStocks);
+  const key = rankingType === "turnover" ? "amount" : rankingType === "volume_ratio" ? "volume_ratio" : "change_pct";
+  return merged.sort((a, b) => {
+    const left = Number(a[key] ?? 0);
+    const right = Number(b[key] ?? 0);
+    return rankingType === "losers" ? left - right : right - left;
+  });
 }
 
 function sectionTitle(section: Section) {

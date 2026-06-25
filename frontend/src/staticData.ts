@@ -1,4 +1,4 @@
-import type { Announcement, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, ThemeMeta } from "./types";
+import type { Announcement, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, StockProfile, StockSearchResult, ThemeMeta } from "./types";
 
 const updated_at = "2026-06-25T03:44:51.000Z";
 const source = "static-demo:seed";
@@ -90,6 +90,25 @@ function predict(stock: Stock, horizon = 3): Prediction {
   };
 }
 
+function profile(stock: Stock): StockProfile {
+  return {
+    code: stock.code,
+    name: stock.name,
+    full_name: `${stock.name}股份有限公司`,
+    listing_date: "",
+    region: "",
+    industry: stock.sector,
+    main_business: `公司主营业务与${stock.sector || "所属行业"}相关，公开静态演示使用样例资料。`,
+    business_scope: "静态演示模式不连接实时资料源；本地/公网后端模式会优先尝试公开资料接口。",
+    website: "",
+    total_shares: 0,
+    float_shares: 0,
+    source: "static-demo:profile",
+    updated_at,
+    stale: true
+  };
+}
+
 function filterStocks(params: URLSearchParams) {
   const q = params.get("q")?.trim().toLowerCase();
   const theme = params.get("theme");
@@ -101,6 +120,20 @@ function filterStocks(params: URLSearchParams) {
     .sort((a, b) => Number(a[sort as keyof Stock] || 0) - Number(b[sort as keyof Stock] || 0));
   if (order !== "asc") rows.reverse();
   return rows;
+}
+
+function detailForCode(code: string): StockDetail {
+  const quote = stocks.find((item) => item.code === code) ?? stocks[0];
+  return {
+    quote,
+    history: history(quote.code),
+    profile: profile(quote),
+    news: news.filter((item) => item.theme === quote.theme || item.theme === "market"),
+    announcements: announcements.filter((item) => item.code === quote.code),
+    predictions: [1, 3, 5].map((horizon) => predict(quote, horizon)),
+    source,
+    updated_at
+  };
 }
 
 export const staticApi = {
@@ -120,17 +153,18 @@ export const staticApi = {
     const items = filterStocks(params);
     return { items, total: items.length, page: 1, page_size: items.length, source, updated_at };
   },
+  async searchStocks(q: string): Promise<ListResponse<StockSearchResult>> {
+    const query = q.trim().toLowerCase();
+    const items = stocks
+      .filter((item) => item.code.includes(query) || item.name.toLowerCase().includes(query) || item.sector.toLowerCase().includes(query))
+      .map((item) => ({ code: item.code, name: item.name, market: item.code.startsWith("6") ? "SH" : "SZ", source: "static-demo:search" }));
+    return { items, source, updated_at };
+  },
   async stockDetail(code: string): Promise<StockDetail> {
-    const quote = stocks.find((item) => item.code === code) ?? stocks[0];
-    return {
-      quote,
-      history: history(quote.code),
-      news: news.filter((item) => item.theme === quote.theme || item.theme === "market"),
-      announcements: announcements.filter((item) => item.code === quote.code),
-      predictions: [1, 3, 5].map((horizon) => predict(quote, horizon)),
-      source,
-      updated_at
-    };
+    return detailForCode(code);
+  },
+  async resolveStock(code: string): Promise<StockDetail> {
+    return detailForCode(code);
   },
   async sectors(theme?: string): Promise<ListResponse<Sector>> {
     const items = sectors.filter((item) => !theme || item.theme === theme);

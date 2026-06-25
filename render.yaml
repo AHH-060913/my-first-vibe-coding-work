@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: my-first-vibe-coding-work-api
+    env: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: A_DASHBOARD_DATA_MODE
+        value: auto
+      - key: A_DASHBOARD_CORS
+        value: https://ahh-060913.github.io,http://localhost:5173,http://127.0.0.1:5173

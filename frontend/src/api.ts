@@ -6,11 +6,12 @@ import type {
   Prediction,
   Sector,
   Stock,
+  StockSearchResult,
   StockDetail
 } from "./types";
 import { staticApi } from "./staticData";
 
-const API_ROOT = "/api";
+const API_ROOT = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
 const STATIC_DEMO = import.meta.env.VITE_STATIC_DEMO === "true";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -28,7 +29,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   overview: () => (STATIC_DEMO ? staticApi.overview() : fetchJson<Overview>("/market/overview")),
   stocks: (params: URLSearchParams) => (STATIC_DEMO ? staticApi.stocks(params) : fetchJson<ListResponse<Stock>>(`/stocks?${params.toString()}`)),
+  searchStocks: (q: string) => (STATIC_DEMO ? staticApi.searchStocks(q) : fetchJson<ListResponse<StockSearchResult>>(`/search/stocks?q=${encodeURIComponent(q)}`)),
   stockDetail: (code: string) => (STATIC_DEMO ? staticApi.stockDetail(code) : fetchJson<StockDetail>(`/stocks/${code}`)),
+  resolveStock: (code: string) => (STATIC_DEMO ? staticApi.resolveStock(code) : fetchJson<StockDetail>(`/stocks/${code}/resolve`)),
   sectors: (theme?: string) => (STATIC_DEMO ? staticApi.sectors(theme) : fetchJson<ListResponse<Sector>>(`/sectors${theme ? `?theme=${theme}` : ""}`)),
   rankings: (type: string) => (STATIC_DEMO ? staticApi.rankings(type) : fetchJson<ListResponse<Stock | Sector | Prediction>>(`/rankings?type=${type}`)),
   news: (params: URLSearchParams) => (STATIC_DEMO ? staticApi.news(params) : fetchJson<ListResponse<NewsItem>>(`/news?${params.toString()}`)),

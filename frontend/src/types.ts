@@ -37,6 +37,34 @@ export interface Stock {
   speed?: number;
   sector: string;
   theme: ThemeKey | "";
+  source?: string;
+  updated_at?: string;
+  stale?: boolean;
+}
+
+export interface StockSearchResult {
+  code: string;
+  name: string;
+  market: "SH" | "SZ" | "BJ" | string;
+  pinyin?: string;
+  source: string;
+}
+
+export interface StockProfile {
+  code: string;
+  name: string;
+  full_name: string;
+  listing_date: string;
+  region: string;
+  industry: string;
+  main_business: string;
+  business_scope: string;
+  website: string;
+  total_shares: number;
+  float_shares: number;
+  source: string;
+  updated_at: string;
+  stale?: boolean;
 }
 
 export interface Sector {
@@ -137,6 +165,7 @@ export interface ListResponse<T> {
 export interface StockDetail {
   quote: Stock;
   history: HistoryPoint[];
+  profile?: StockProfile;
   news: NewsItem[];
   announcements: Announcement[];
   predictions: Prediction[];

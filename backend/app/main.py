@@ -66,10 +66,23 @@ def stocks(
     return market_service().get_stocks(q=q, theme=theme, sort=sort, order=order, page=page, page_size=page_size)
 
 
+@app.get("/api/search/stocks")
+def search_stocks(q: str = Query("", min_length=1)) -> dict[str, Any]:
+    return market_service().search_stocks(q)
+
+
 @app.get("/api/stocks/{code}")
 def stock_detail(code: str) -> dict[str, Any]:
     normalized = code.zfill(6)
     detail = market_service().stock_detail(normalized)
+    detail["predictions"] = prediction_service().predictions(code=normalized)["items"]
+    return detail
+
+
+@app.get("/api/stocks/{code}/resolve")
+def resolve_stock(code: str) -> dict[str, Any]:
+    normalized = code.zfill(6)
+    detail = market_service().resolve_stock(normalized)
     detail["predictions"] = prediction_service().predictions(code=normalized)["items"]
     return detail
 

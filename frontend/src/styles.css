@@ -217,6 +217,67 @@ nav button:hover {
   margin-bottom: 18px;
 }
 
+.searchAction {
+  min-width: 86px;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid #78aaa1;
+  border-radius: 8px;
+  color: #143d37;
+  background: #e5f2ef;
+}
+
+.searchAction:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.searchResults {
+  margin: 12px 0 16px;
+  padding: 14px;
+  border: 1px solid #dfe5df;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.searchResultList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.searchResultList button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  padding: 11px 12px;
+  border: 1px solid #edf0f2;
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.searchResultList button:hover {
+  border-color: #78aaa1;
+}
+
+.searchResultList strong {
+  font-size: 14px;
+}
+
+.searchResultList span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.searchResultList em {
+  grid-row: span 2;
+  align-self: center;
+  color: #2f6f6d;
+  font-style: normal;
+  font-size: 13px;
+}
+
 .themeRow button,
 .segmented button {
   min-height: 34px;
@@ -439,6 +500,60 @@ nav button:hover {
   gap: 8px;
 }
 
+.staleBadge {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: #8a5a00;
+  background: #fff2d7;
+  font-size: 12px;
+}
+
+.profileBlock {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #edf0f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.profileBlock h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.profileGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.profileGrid span {
+  padding: 8px;
+  border-radius: 8px;
+  color: #667085;
+  background: #f6f8f6;
+  font-size: 12px;
+}
+
+.profileGrid b {
+  display: block;
+  margin-top: 3px;
+  color: #1d2939;
+  font-weight: 700;
+}
+
+.profileBlock p {
+  margin: 10px 0 6px;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.profileBlock small {
+  color: #667085;
+}
+
 .quoteStats span,
 .miniPredictions div {
   padding: 9px 10px;
@@ -523,6 +638,19 @@ tbody tr:hover {
 
 td strong {
   font-size: 13px;
+}
+
+.nameButton {
+  padding: 0;
+  border: 0;
+  color: #1d2939;
+  background: transparent;
+  font-weight: 700;
+}
+
+.nameButton:hover {
+  color: #2f6f6d;
+  text-decoration: underline;
 }
 
 .up {
@@ -676,6 +804,7 @@ td strong {
 
   .breadth,
   .quoteStats,
+  .profileGrid,
   .miniPredictions {
     grid-template-columns: repeat(2, 1fr);
   }

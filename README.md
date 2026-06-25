@@ -1,23 +1,38 @@
 # 我的第一个vibe coding作品
 
-一个中文 A 股个人投研看板，也是我的第一个 vibe coding 作品。项目覆盖大盘指数、科技/新能源/显示/光伏主题、个股行情、涨跌排行、热门板块、财经新闻、公司公告、自选股和 1/3/5 个交易日量化评分。
+一个中文 A 股个人投研看板，也是我的第一个 vibe coding 作品。项目覆盖大盘指数、科技/新能源/显示/光伏主题、个股行情、涨跌排行、热门板块、财经新闻、公司公告、自选股、在线股票搜索和 1/3/5 个交易日量化评分。
+
+量化预测只展示上涨概率、跑赢概率、置信度、因子贡献和风险提示，不展示买入/卖出建议。结果仅供研究，不构成投资建议。
 
 ## 在线展示
 
-项目支持 GitHub Pages 静态演示部署。公开页面使用内置 seed 数据，不依赖后端服务，适合给大家直接打开浏览。
+GitHub Pages 页面：
 
-在线地址：https://ahh-060913.github.io/my-first-vibe-coding-work/
+https://ahh-060913.github.io/my-first-vibe-coding-work/
 
-完整本地版仍然支持 FastAPI + AKShare + SQLite，用于连接免费 A 股数据源和本地缓存。
+公开页面默认支持两种形态：
+
+- 未配置公网后端时：使用内置 `seed` 数据作为静态演示，打开稳定。
+- 配置 `VITE_API_BASE_URL` 后：Pages 前端会连接公网 FastAPI 后端，支持在线搜索任意 A 股并解析详情。
+
+## 核心功能
+
+- 大盘指数、市场宽度、成交额、热门板块。
+- 科技、新能源、显示、光伏主题行业页。
+- 个股行情表、涨跌排行、成交额排行、换手率排行、量比排行、模型评分榜。
+- 在线搜索股票代码或名称，搜索结果可添加到浏览器本地样本池。
+- 新增股票会进入个股页、排行、模型预测和自选股视图；样本池保存在 `localStorage:a-share-sample-pool`。
+- 股票名称可点击打开详情，展示行情、K 线、公司背景、主营业务、相关新闻、公告和预测评分。
+- 数据返回 `source`、`updated_at`、`stale`，数据源失败时展示最近可用数据。
 
 ## 技术栈
 
 - 前端：React + Vite + TypeScript + ECharts + lucide-react
 - 后端：FastAPI + AKShare + pandas + scikit-learn + SQLite
-- 数据模式：默认 `seed`，可通过 `A_DASHBOARD_DATA_MODE=auto` 或 `live` 切换到 AKShare 免费数据源
-- 公开部署：GitHub Pages + `VITE_STATIC_DEMO=true`
+- 免费数据源：新浪/腾讯单股行情优先，AKShare/东方财富全市场数据，其次最近成功缓存，最后 `seed` 样例数据
+- 公开部署：GitHub Pages 前端 + Render 免费 FastAPI 后端
 
-## 快速启动
+## 本地启动
 
 ```powershell
 # 后端
@@ -33,18 +48,6 @@ npm run dev
 ```
 
 访问：http://127.0.0.1:5173
-
-## GitHub Pages 部署
-
-仓库推送到 GitHub 后，`.github/workflows/pages.yml` 会在 `main` 分支 push 时自动构建静态演示版并发布到 GitHub Pages。
-
-构建命令等价于：
-
-```powershell
-cd frontend
-$env:VITE_STATIC_DEMO="true"
-npm run build:static
-```
 
 ## 数据模式
 
@@ -66,11 +69,29 @@ $env:A_DASHBOARD_DATA_MODE="auto"
 $env:A_DASHBOARD_DATA_MODE="live"
 ```
 
+前端连接远程后端：
+
+```powershell
+$env:VITE_API_BASE_URL="https://你的-render-服务.onrender.com/api"
+npm run build
+```
+
+## GitHub Pages + Render
+
+1. 在 Render 创建 Web Service，连接这个 GitHub 仓库；仓库内的 `render.yaml` 已配置 `backend` 作为后端服务。
+2. Render 后端启动后，打开 `https://你的-render-服务.onrender.com/api/health` 确认在线。
+3. 在 GitHub 仓库 `Settings -> Secrets and variables -> Actions -> Variables` 新增变量：
+   - `VITE_API_BASE_URL=https://你的-render-服务.onrender.com/api`
+4. 推送到 `main` 后，`.github/workflows/pages.yml` 会自动构建 Pages；如果没有设置 `VITE_API_BASE_URL`，会自动回到静态演示模式。
+
 ## API
 
+- `GET /api/health`
 - `GET /api/market/overview`
 - `GET /api/stocks`
 - `GET /api/stocks/{code}`
+- `GET /api/stocks/{code}/resolve`
+- `GET /api/search/stocks?q=`
 - `GET /api/sectors?theme=tech|new_energy|display|pv`
 - `GET /api/rankings?type=gainers|losers|turnover|volume_ratio|hot_sector|model_score`
 - `GET /api/news`
@@ -88,8 +109,5 @@ cd backend
 
 cd ..\frontend
 npm run build
+$env:VITE_STATIC_DEMO="true"; npm run build:static
 ```
-
-## 说明
-
-量化预测只展示上涨概率、跑赢概率、置信度、因子贡献和风险提示，不展示买入/卖出建议。结果仅供研究，不构成投资建议。
