@@ -6,6 +6,8 @@
 
 项目支持 GitHub Pages 静态演示部署。公开页面使用内置 seed 数据，不依赖后端服务，适合给大家直接打开浏览。
 
+在线地址：https://ahh-060913.github.io/my-first-vibe-coding-work/
+
 完整本地版仍然支持 FastAPI + AKShare + SQLite，用于连接免费 A 股数据源和本地缓存。
 
 ## 技术栈
