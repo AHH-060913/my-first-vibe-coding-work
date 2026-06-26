@@ -27,6 +27,24 @@ const stocks: Stock[] = [
   { code: "601899", name: "紫金矿业", theme: "market", sector: "有色金属", price: 18.61, change_pct: 2.49, turnover_rate: 1.11, volume_ratio: 1.25, amount: 4030000000, pe: 17.9, pb: 4.2, market_cap: 492000000000 }
 ];
 
+const xiaomiStock: Stock = {
+  code: "01810",
+  market: "HK",
+  name: "小米集团-W",
+  theme: "tech",
+  sector: "港股科技",
+  price: 21.58,
+  change_pct: -3.23,
+  turnover_rate: 0,
+  volume_ratio: 0,
+  amount: 2068885591,
+  pe: 12.07,
+  pb: 0,
+  market_cap: 460544310000,
+  stale: true,
+  source: "static-demo:hk"
+};
+
 const sectors: Sector[] = [
   { name: "半导体", theme: "tech", change_pct: 2.74, amount: 84200000000, turnover_rate: 3.18, up_count: 86, down_count: 24, leader: "中际旭创", leader_change_pct: 4.12 },
   { name: "人工智能", theme: "tech", change_pct: 2.18, amount: 77600000000, turnover_rate: 3.42, up_count: 74, down_count: 29, leader: "海光信息", leader_change_pct: 3.26 },
@@ -91,6 +109,24 @@ function predict(stock: Stock, horizon = 3): Prediction {
 }
 
 function profile(stock: Stock): StockProfile {
+  if (stock.market === "HK" && stock.code === "01810") {
+    return {
+      code: stock.code,
+      name: stock.name,
+      full_name: "小米集团",
+      listing_date: "2018-07-09",
+      region: "香港",
+      industry: "消费电子 / 互联网服务",
+      main_business: "小米集团主要从事智能手机、IoT 与生活消费产品、互联网服务及智能电动汽车等业务，收入结构与消费电子、智能硬件和生态服务高度相关。",
+      business_scope: "智能手机、IoT 与生活消费产品、互联网服务、智能电动汽车及相关生态业务。",
+      website: "https://www.mi.com",
+      total_shares: 0,
+      float_shares: 0,
+      source: "static-demo:profile",
+      updated_at,
+      stale: true
+    };
+  }
   return {
     code: stock.code,
     name: stock.name,
@@ -122,8 +158,8 @@ function filterStocks(params: URLSearchParams) {
   return rows;
 }
 
-function detailForCode(code: string): StockDetail {
-  const quote = stocks.find((item) => item.code === code) ?? stocks[0];
+function detailForCode(code: string, market?: string): StockDetail {
+  const quote = market === "HK" || code === "01810" ? xiaomiStock : stocks.find((item) => item.code === code) ?? stocks[0];
   return {
     quote,
     history: history(quote.code),
@@ -155,16 +191,19 @@ export const staticApi = {
   },
   async searchStocks(q: string): Promise<ListResponse<StockSearchResult>> {
     const query = q.trim().toLowerCase();
-    const items = stocks
+    const items: StockSearchResult[] = stocks
       .filter((item) => item.code.includes(query) || item.name.toLowerCase().includes(query) || item.sector.toLowerCase().includes(query))
       .map((item) => ({ code: item.code, name: item.name, market: item.code.startsWith("6") ? "SH" : "SZ", source: "static-demo:search" }));
+    if (["小米", "小米集团", "xiaomi", "01810"].some((keyword) => query.includes(keyword))) {
+      items.unshift({ code: "01810", name: "小米集团-W", market: "HK", source: "static-demo:search" });
+    }
     return { items, source, updated_at };
   },
-  async stockDetail(code: string): Promise<StockDetail> {
-    return detailForCode(code);
+  async stockDetail(code: string, market?: string): Promise<StockDetail> {
+    return detailForCode(code, market);
   },
-  async resolveStock(code: string): Promise<StockDetail> {
-    return detailForCode(code);
+  async resolveStock(code: string, market?: string): Promise<StockDetail> {
+    return detailForCode(code, market);
   },
   async sectors(theme?: string): Promise<ListResponse<Sector>> {
     const items = sectors.filter((item) => !theme || item.theme === theme);

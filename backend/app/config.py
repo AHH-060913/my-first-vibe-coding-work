@@ -11,7 +11,15 @@ class Settings(BaseSettings):
     data_mode: str = Field(default="seed", validation_alias="A_DASHBOARD_DATA_MODE")
     cache_ttl_seconds: int = Field(default=90, validation_alias="A_DASHBOARD_CACHE_TTL")
     db_path: Path = Field(default=Path("data/dashboard.sqlite3"), validation_alias="A_DASHBOARD_DB")
-    cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173", validation_alias="A_DASHBOARD_CORS")
+    cors_origins: str = Field(
+        default=(
+            "https://ahh-060913.github.io,"
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://localhost:5174,http://127.0.0.1:5174,"
+            "http://localhost:5175,http://127.0.0.1:5175"
+        ),
+        validation_alias="A_DASHBOARD_CORS",
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:

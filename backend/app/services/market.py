@@ -7,7 +7,7 @@ from .. import database
 from ..config import get_settings
 from ..seed import THEMES
 from .akshare_client import AkshareClient
-from .providers import FreeMarketProvider, normalize_code
+from .providers import FreeMarketProvider, normalize_code, normalize_symbol
 
 
 def now_iso() -> str:
@@ -109,34 +109,35 @@ class MarketService:
         rows = self.provider.search_stocks(q)
         return {"items": rows, "source": "free-provider:search", "updated_at": now_iso()}
 
-    def _profile(self, code: str, name: str = "") -> tuple[dict[str, Any], str, str]:
-        normalized = normalize_code(code)
+    def _profile(self, code: str, name: str = "", market: str = "") -> tuple[dict[str, Any], str, str]:
+        normalized, normalized_market = normalize_symbol(code, market)
         return self._cached(
-            f"stock:profile:{normalized}",
-            lambda: self.provider.profile(normalized, name),
+            f"stock:profile:{normalized_market}:{normalized}",
+            lambda: self.provider.profile(normalized, name, normalized_market),
             ttl_seconds=60 * 60 * 12,
         )
 
-    def resolve_stock(self, code: str) -> dict[str, Any]:
-        normalized = normalize_code(code)
+    def resolve_stock(self, code: str, market: str = "") -> dict[str, Any]:
+        normalized, normalized_market = normalize_symbol(code, market)
         payload, source, updated_at = self._cached(
-            f"stock:resolve:{normalized}",
-            lambda: (self._resolve_stock_uncached(normalized), "free-provider:resolve"),
+            f"stock:resolve:{normalized_market}:{normalized}",
+            lambda: (self._resolve_stock_uncached(normalized, normalized_market), "free-provider:resolve"),
         )
         payload["source"] = payload.get("source") or source
         payload["updated_at"] = payload.get("updated_at") or updated_at
         if isinstance(payload.get("quote"), dict):
             payload["quote"]["source"] = payload["quote"].get("source") or payload["source"]
+            payload["quote"]["market"] = payload["quote"].get("market") or normalized_market
         return payload
 
-    def _resolve_stock_uncached(self, code: str) -> dict[str, Any]:
-        quote, quote_source = self.provider.quote(code)
+    def _resolve_stock_uncached(self, code: str, market: str = "") -> dict[str, Any]:
+        quote, quote_source = self.provider.quote(code, market)
         history, history_source = self.client.stock_history(code)
         if quote.get("price") and history_source.startswith("seed") and not any(point.get("date") for point in history[-3:]):
-            history = self.provider.synthetic_history(code, quote.get("price"))
+            history = self.provider.synthetic_history(code, quote.get("price"), market)
         elif quote.get("price") and history_source.startswith("seed"):
-            history = self.provider.synthetic_history(code, quote.get("price"))
-        profile, profile_source, _ = self._profile(code, quote.get("name", ""))
+            history = self.provider.synthetic_history(code, quote.get("price"), market)
+        profile, profile_source, _ = self._profile(code, quote.get("name", ""), market)
         news, _, _ = self.news()
         announcements, _, _ = self.announcements()
         related_news = [
@@ -157,16 +158,21 @@ class MarketService:
             "updated_at": quote.get("updated_at") or now_iso(),
         }
         payload["quote"]["source"] = payload["quote"].get("source") or quote_source
+        payload["quote"]["market"] = payload["quote"].get("market") or market
         return payload
 
-    def stock_detail(self, code: str) -> dict[str, Any]:
+    def stock_detail(self, code: str, market: str = "") -> dict[str, Any]:
+        normalized, normalized_market = normalize_symbol(code, market)
+        if normalized_market == "HK":
+            return self.resolve_stock(normalized, normalized_market)
         stocks, source, updated_at = self.stocks()
-        quote = next((item for item in stocks if item["code"] == code), None)
+        quote = next((item for item in stocks if item["code"] == normalized), None)
         if quote is None:
-            resolved = self.resolve_stock(code)
+            resolved = self.resolve_stock(normalized, normalized_market)
             return resolved
-        history, history_source = self.client.stock_history(code)
-        profile, profile_source, _ = self._profile(code, quote.get("name", ""))
+        quote["market"] = quote.get("market") or normalized_market
+        history, history_source = self.client.stock_history(normalized)
+        profile, profile_source, _ = self._profile(normalized, quote.get("name", ""), normalized_market)
         news, _, _ = self.news()
         announcements, _, _ = self.announcements()
         related_news = [
@@ -175,7 +181,7 @@ class MarketService:
             if item.get("theme") in {quote.get("theme"), "market"} or quote.get("name", "") in item.get("title", "")
         ][:8]
         related_announcements = [
-            item for item in announcements if item.get("code") == code or item.get("name") == quote.get("name")
+            item for item in announcements if item.get("code") == normalized or item.get("name") == quote.get("name")
         ][:8]
         payload = {
             "quote": quote,

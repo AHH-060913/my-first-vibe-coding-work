@@ -18,6 +18,7 @@ export interface IndexQuote {
 export interface Stock {
   code: string;
   name: string;
+  market?: string;
   price: number;
   change_pct: number;
   change?: number;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.market import MarketService
+from app.services.providers import normalize_symbol
 
 
 class FakeClient:
@@ -18,7 +19,7 @@ class FakeProvider:
     def search_stocks(self, query: str, limit: int = 12):
         return [{"code": "123456", "name": "测试股份", "market": "SH", "source": "fake:search"}]
 
-    def quote(self, code: str):
+    def quote(self, code: str, market: str = ""):
         return (
             {
                 "code": code,
@@ -38,7 +39,7 @@ class FakeProvider:
             "fake:quote",
         )
 
-    def profile(self, code: str, name: str = ""):
+    def profile(self, code: str, name: str = "", market: str = ""):
         return (
             {
                 "code": code,
@@ -59,7 +60,7 @@ class FakeProvider:
             "fake:profile",
         )
 
-    def synthetic_history(self, code: str, price: float | None = None):
+    def synthetic_history(self, code: str, price: float | None = None, market: str = ""):
         return [{"date": "2026-06-25", "close": price or 10}]
 
 
@@ -68,6 +69,12 @@ def test_search_stocks_uses_provider() -> None:
     payload = service.search_stocks("测试")
     assert payload["items"][0]["code"] == "123456"
     assert payload["items"][0]["source"] == "fake:search"
+
+
+def test_normalize_symbol_keeps_hk_codes() -> None:
+    assert normalize_symbol("01810") == ("01810", "HK")
+    assert normalize_symbol("HK01810") == ("01810", "HK")
+    assert normalize_symbol("300308") == ("300308", "SZ")
 
 
 def test_resolve_stock_contains_quote_profile_and_related_content() -> None:

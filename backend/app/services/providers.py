@@ -36,10 +36,13 @@ PROFILE_FALLBACKS: dict[str, str] = {
     "601318": "公司业务覆盖保险、银行、资产管理和科技服务，是金融板块权重样本。",
     "600036": "公司主要从事商业银行业务，是银行板块核心样本。",
     "601899": "公司主要从事金、铜、锌等矿产资源勘查、开发和冶炼加工，是有色金属板块代表。",
+    "HK:01810": "小米集团主要从事智能手机、IoT 与生活消费产品、互联网服务及智能电动汽车等业务，收入结构与消费电子、智能硬件和生态服务高度相关。",
 }
 
 
-def market_prefix(code: str) -> str:
+def market_prefix(code: str, market: str = "") -> str:
+    if market.upper() == "HK" or code.upper().startswith("HK"):
+        return "hk"
     normalized = code.zfill(6)
     if normalized.startswith(("6", "9")):
         return "sh"
@@ -51,6 +54,23 @@ def market_prefix(code: str) -> str:
 def normalize_code(value: str) -> str:
     digits = re.sub(r"\D", "", value or "")
     return digits[-6:].zfill(6) if digits else ""
+
+
+def normalize_symbol(value: str, market: str = "") -> tuple[str, str]:
+    raw = (value or "").strip()
+    upper_market = market.upper()
+    if raw.upper().startswith("HK"):
+        digits = re.sub(r"\D", "", raw)
+        return digits[-5:].zfill(5), "HK"
+    digits = re.sub(r"\D", "", raw)
+    if upper_market == "HK":
+        return digits[-5:].zfill(5), "HK"
+    if upper_market in {"SH", "SZ", "BJ"}:
+        return digits[-6:].zfill(6), upper_market
+    if digits and len(digits) <= 5 and raw.startswith("0"):
+        return digits[-5:].zfill(5), "HK"
+    code = digits[-6:].zfill(6) if digits else ""
+    return code, market_prefix(code).upper() if code else upper_market
 
 
 def infer_theme(name: str, sector: str = "") -> str:
@@ -75,14 +95,14 @@ class FreeMarketProvider:
             return []
         results: list[dict[str, Any]] = []
         if q.isdigit():
-            code = normalize_code(q)
-            if len(code) == 6:
+            code, market = normalize_symbol(q)
+            if code:
                 seeded = seed_stock_by_code(code)
                 results.append(
                     {
                         "code": code,
                         "name": seeded["name"] if seeded else code,
-                        "market": market_prefix(code).upper(),
+                        "market": market,
                         "source": "local:code",
                     }
                 )
@@ -93,19 +113,20 @@ class FreeMarketProvider:
                 continue
         unique: dict[str, dict[str, Any]] = {}
         for item in results:
-            code = normalize_code(item.get("code", ""))
+            market = (item.get("market") or "").upper()
+            code, market = normalize_symbol(item.get("code", ""), market)
             if not code:
                 continue
-            market = item.get("market") or market_prefix(code).upper()
-            if market not in {"SH", "SZ", "BJ"}:
+            if market not in {"SH", "SZ", "BJ", "HK"}:
                 continue
-            unique.setdefault(code, {**item, "code": code, "market": market})
+            unique.setdefault(f"{market}:{code}", {**item, "code": code, "market": market})
         return list(unique.values())[:limit]
 
-    def quote(self, code: str) -> tuple[dict[str, Any], str]:
-        normalized = normalize_code(code)
+    def quote(self, code: str, market: str = "") -> tuple[dict[str, Any], str]:
+        normalized, normalized_market = normalize_symbol(code, market)
         errors: list[str] = []
-        for loader in (self._quote_sina, self._quote_tencent):
+        loaders = (self._quote_tencent_hk, self._quote_sina_hk) if normalized_market == "HK" else (self._quote_sina, self._quote_tencent)
+        for loader in loaders:
             try:
                 quote_data, source = loader(normalized)
                 seeded = seed_stock_by_code(normalized) or {}
@@ -118,6 +139,7 @@ class FreeMarketProvider:
                 quote_data["turnover_rate"] = quote_data.get("turnover_rate") or seeded.get("turnover_rate", 0)
                 quote_data["stale"] = False
                 quote_data["source"] = source
+                quote_data["market"] = normalized_market
                 return quote_data, source
             except Exception as exc:
                 errors.append(f"{loader.__name__}:{type(exc).__name__}")
@@ -148,18 +170,25 @@ class FreeMarketProvider:
                 "theme": "market",
                 "stale": True,
                 "source": source,
+                "market": normalized_market,
                 "updated_at": "",
             },
             source,
         )
 
-    def profile(self, code: str, name: str = "") -> tuple[dict[str, Any], str]:
-        normalized = normalize_code(code)
-        seeded = seed_stock_by_code(normalized)
+    def profile(self, code: str, name: str = "", market: str = "") -> tuple[dict[str, Any], str]:
+        normalized, normalized_market = normalize_symbol(code, market)
+        seeded = seed_stock_by_code(normalized) if normalized_market != "HK" else None
         if seeded:
             return self._seed_profile(seeded), "seed:profile"
+        known_profile = self._known_profile(normalized, name, normalized_market)
+        if known_profile:
+            return known_profile, "local:profile"
 
         profile = self._blank_profile(normalized, name)
+        profile["market"] = normalized_market
+        if normalized_market == "HK":
+            return profile, "fallback:profile"
         sources: list[str] = []
         for loader in (self._profile_eastmoney, self._profile_ths):
             try:
@@ -179,8 +208,9 @@ class FreeMarketProvider:
 
         return profile, "fallback:profile"
 
-    def synthetic_history(self, code: str, price: float | None = None) -> list[dict[str, Any]]:
-        rows = seed_history(code)
+    def synthetic_history(self, code: str, price: float | None = None, market: str = "") -> list[dict[str, Any]]:
+        normalized, normalized_market = normalize_symbol(code, market)
+        rows = seed_history(normalized)
         if price and rows:
             scale = price / rows[-1]["close"] if rows[-1]["close"] else 1
             for row in rows:
@@ -263,6 +293,76 @@ class FreeMarketProvider:
             "tencent:qt.gtimg.cn",
         )
 
+    def _quote_sina_hk(self, code: str) -> tuple[dict[str, Any], str]:
+        response = requests.get(f"http://hq.sinajs.cn/list=hk{code}", timeout=self.timeout, headers=DEFAULT_HEADERS)
+        response.encoding = "gb18030"
+        match = re.search(r'="(.*)"', response.text)
+        if not match:
+            raise ValueError("empty sina hk response")
+        fields = match.group(1).split(",")
+        if len(fields) < 18 or not fields[1]:
+            raise ValueError("invalid sina hk quote")
+        price = safe_float(fields[6])
+        previous_close = safe_float(fields[3])
+        change = safe_float(fields[7])
+        change_pct = safe_float(fields[8])
+        return (
+            {
+                "code": code,
+                "name": _clean_hk_name(fields[1]),
+                "price": price,
+                "change_pct": change_pct,
+                "change": change,
+                "volume": safe_int(fields[11]),
+                "amount": safe_float(fields[10]),
+                "high": safe_float(fields[4]),
+                "low": safe_float(fields[5]),
+                "open": safe_float(fields[2]),
+                "previous_close": previous_close,
+                "sector": "港股科技",
+                "theme": "tech",
+                "pe": 0,
+                "pb": 0,
+                "market_cap": 0,
+                "volume_ratio": 0,
+                "turnover_rate": 0,
+                "updated_at": f"{fields[17]} {fields[18]}" if len(fields) > 18 else datetime.now().isoformat(timespec="seconds"),
+            },
+            "sina:hq.sinajs.cn:hk",
+        )
+
+    def _quote_tencent_hk(self, code: str) -> tuple[dict[str, Any], str]:
+        response = requests.get(f"https://qt.gtimg.cn/q=hk{code}", timeout=self.timeout, headers=DEFAULT_HEADERS)
+        response.encoding = "gbk"
+        match = re.search(r'="(.*)"', response.text)
+        if not match:
+            raise ValueError("empty tencent hk response")
+        fields = match.group(1).split("~")
+        if len(fields) < 38 or not fields[1]:
+            raise ValueError("invalid tencent hk quote")
+        return (
+            {
+                "code": code,
+                "name": _clean_hk_name(fields[1]),
+                "price": safe_float(fields[3]),
+                "previous_close": safe_float(fields[4]),
+                "open": safe_float(fields[5]),
+                "volume": safe_int(fields[36]),
+                "amount": safe_float(fields[37]),
+                "change": safe_float(fields[31]),
+                "change_pct": safe_float(fields[32]),
+                "high": safe_float(fields[33]),
+                "low": safe_float(fields[34]),
+                "turnover_rate": safe_float(fields[38]) if len(fields) > 38 else 0,
+                "pe": safe_float(fields[39]) if len(fields) > 39 else 0,
+                "market_cap": safe_float(fields[44]) * 100000000 if len(fields) > 44 else 0,
+                "sector": "港股科技",
+                "theme": "tech",
+                "updated_at": fields[30] if len(fields) > 30 else datetime.now().isoformat(timespec="seconds"),
+            },
+            "tencent:qt.gtimg.cn:hk",
+        )
+
     def _search_tencent(self, query: str, limit: int) -> list[dict[str, Any]]:
         url = f"http://smartbox.gtimg.cn/s3/?q={quote(query)}&t=all"
         response = requests.get(url, timeout=self.timeout, headers=DEFAULT_HEADERS)
@@ -276,9 +376,11 @@ class FreeMarketProvider:
             if len(bits) < 5:
                 continue
             market, code, name, pinyin, kind = bits[:5]
-            if market not in {"sh", "sz", "bj"} or "GP-A" not in kind:
+            if market not in {"sh", "sz", "bj", "hk"} or "GP" not in kind:
                 continue
-            rows.append({"code": code, "name": name, "market": market.upper(), "pinyin": pinyin, "source": "tencent:smartbox"})
+            if market in {"sh", "sz", "bj"} and "GP-A" not in kind:
+                continue
+            rows.append({"code": code, "name": _decode_text(_clean_hk_name(name)), "market": market.upper(), "pinyin": pinyin, "source": "tencent:smartbox"})
         return rows[:limit]
 
     def _search_sina(self, query: str, limit: int) -> list[dict[str, Any]]:
@@ -307,6 +409,8 @@ class FreeMarketProvider:
         for item in SEED_STOCKS:
             if q in item["code"].lower() or q in item["name"].lower():
                 rows.append({"code": item["code"], "name": item["name"], "market": market_prefix(item["code"]).upper(), "source": "seed:search"})
+        if q in {"小米", "小米集团", "xiaomi", "xmjt", "01810"}:
+            rows.append({"code": "01810", "name": "小米集团-W", "market": "HK", "source": "local:search"})
         return rows[:limit]
 
     def _profile_eastmoney(self, code: str, name: str = "") -> tuple[dict[str, Any], str]:
@@ -391,6 +495,29 @@ class FreeMarketProvider:
             "stale": True,
         }
 
+    def _known_profile(self, code: str, name: str = "", market: str = "") -> dict[str, Any] | None:
+        business = PROFILE_FALLBACKS.get(f"{market}:{code}")
+        if not business:
+            return None
+        company_name = name or ("小米集团-W" if code == "01810" else code)
+        return {
+            "code": code,
+            "name": company_name,
+            "full_name": "小米集团",
+            "listing_date": "2018-07-09" if code == "01810" else "",
+            "region": "香港",
+            "industry": "消费电子 / 互联网服务",
+            "main_business": business,
+            "business_scope": "智能手机、IoT 与生活消费产品、互联网服务、智能电动汽车及相关生态业务。",
+            "website": "https://www.mi.com",
+            "total_shares": 0,
+            "float_shares": 0,
+            "source": "local:profile",
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stale": True,
+            "market": market,
+        }
+
     def _blank_profile(self, code: str, name: str = "") -> dict[str, Any]:
         return {
             "code": code,
@@ -430,3 +557,16 @@ def _clean_text(value: Any) -> str:
 def _strip_tags(value: str) -> str:
     text = re.sub(r"<[^>]+>", "", value)
     return re.sub(r"\s+", "", text)
+
+
+def _decode_text(value: str) -> str:
+    if "\\u" not in value:
+        return value
+    try:
+        return value.encode("utf-8").decode("unicode_escape")
+    except UnicodeDecodeError:
+        return value
+
+
+def _clean_hk_name(value: str) -> str:
+    return value.replace("－", "-").replace("Ｗ", "W").replace("w", "-W") if value.endswith("w") else value

@@ -11,6 +11,7 @@ from .config import get_settings
 from .database import add_watchlist, init_db, list_watchlist, remove_watchlist
 from .services.market import MarketService
 from .services.prediction import PredictionService
+from .services.providers import normalize_symbol
 
 settings = get_settings()
 
@@ -72,18 +73,18 @@ def search_stocks(q: str = Query("", min_length=1)) -> dict[str, Any]:
 
 
 @app.get("/api/stocks/{code}")
-def stock_detail(code: str) -> dict[str, Any]:
-    normalized = code.zfill(6)
-    detail = market_service().stock_detail(normalized)
-    detail["predictions"] = prediction_service().predictions(code=normalized)["items"]
+def stock_detail(code: str, market: str = "") -> dict[str, Any]:
+    normalized, normalized_market = normalize_symbol(code, market)
+    detail = market_service().stock_detail(normalized, normalized_market)
+    detail["predictions"] = prediction_service().predictions(code=normalized, market=normalized_market)["items"]
     return detail
 
 
 @app.get("/api/stocks/{code}/resolve")
-def resolve_stock(code: str) -> dict[str, Any]:
-    normalized = code.zfill(6)
-    detail = market_service().resolve_stock(normalized)
-    detail["predictions"] = prediction_service().predictions(code=normalized)["items"]
+def resolve_stock(code: str, market: str = "") -> dict[str, Any]:
+    normalized, normalized_market = normalize_symbol(code, market)
+    detail = market_service().resolve_stock(normalized, normalized_market)
+    detail["predictions"] = prediction_service().predictions(code=normalized, market=normalized_market)["items"]
     return detail
 
 

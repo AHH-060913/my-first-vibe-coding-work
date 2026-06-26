@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import {
   Activity,
   BarChart3,
@@ -66,6 +66,7 @@ export default function App() {
   const [watchlist, setWatchlist] = useState<(ListResponse<Stock> & { codes: string[] }) | null>(null);
   const [samplePool, setSamplePool] = useState<StockDetail[]>(loadSamplePool);
   const [searchResults, setSearchResults] = useState<StockSearchResult[]>([]);
+  const [searchMessage, setSearchMessage] = useState("");
   const [searching, setSearching] = useState(false);
   const [selectedCode, setSelectedCode] = useState("300750");
   const [detail, setDetail] = useState<StockDetail | null>(null);
@@ -85,7 +86,6 @@ export default function App() {
     try {
       const stockParams = new URLSearchParams({ page_size: "40", sort: "change_pct", order: "desc" });
       if (theme) stockParams.set("theme", theme);
-      if (query) stockParams.set("q", query);
 
       const newsParams = new URLSearchParams();
       if (theme) newsParams.set("theme", theme);
@@ -147,7 +147,7 @@ export default function App() {
   }, [samplePool, selectedCode]);
 
   const persistSamplePool = useCallback((next: StockDetail[]) => {
-    const unique = Array.from(new Map(next.map((item) => [item.quote.code, item])).values());
+    const unique = Array.from(new Map(next.map((item) => [stockKey(item.quote), item])).values());
     setSamplePool(unique);
     window.localStorage.setItem(SAMPLE_POOL_KEY, JSON.stringify(unique));
   }, []);
@@ -155,16 +155,19 @@ export default function App() {
   const runOnlineSearch = useCallback(async () => {
     const value = query.trim();
     if (!value) return;
-    setSearching(true);
-    setError(null);
-    try {
-      const payload = await api.searchStocks(value);
-      setSearchResults(payload.items);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "在线搜索失败");
-    } finally {
-      setSearching(false);
-    }
+      setSearching(true);
+      setError(null);
+      setSearchMessage("");
+      try {
+        const payload = await api.searchStocks(value);
+        setSearchResults(payload.items);
+        setSearchMessage(payload.items.length ? "" : `没有找到“${value}”，可换股票代码、简称或完整名称再试。`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "在线搜索失败");
+        setSearchMessage("在线搜索失败，请稍后重试。");
+      } finally {
+        setSearching(false);
+      }
   }, [query]);
 
   const addSearchResult = useCallback(
@@ -172,7 +175,7 @@ export default function App() {
       setSearching(true);
       setError(null);
       try {
-        const resolved = await api.resolveStock(result.code);
+        const resolved = await api.resolveStock(result.code, result.market);
         persistSamplePool([resolved, ...samplePool]);
         setSelectedCode(resolved.quote.code);
         setSection("stocks");
@@ -274,6 +277,7 @@ export default function App() {
             </div>
           </div>
         )}
+        {searchMessage && <div className="searchResults emptySearch">{searchMessage}</div>}
 
         <div className="notice">
           <ShieldAlert size={16} />
@@ -292,28 +296,30 @@ export default function App() {
         </div>
 
         {error && <div className="error">{error}</div>}
-        {section === "overview" && <OverviewPage overview={overview} stocks={displayStocks} sectors={overview?.hot_sectors ?? sectors?.items ?? []} onSelectStock={handleSelectStock} />}
-        {section === "sectors" && <SectorsPage sectors={sectors?.items ?? []} stocks={displayStocks} onSelectStock={handleSelectStock} />}
-        {section === "stocks" && (
-          <StocksPage
-            stocks={displayStocks}
-            detail={detail}
-            watchCodes={watchlist?.codes ?? []}
-            onSelectStock={handleSelectStock}
-            onAddWatch={async (code) => {
-              await api.addWatch(code);
-              setWatchlist(await api.watchlist());
-            }}
-            onRemoveWatch={async (code) => {
-              await api.removeWatch(code);
-              setWatchlist(await api.watchlist());
-            }}
-          />
-        )}
-        {section === "rankings" && <RankingsPage rankingType={rankingType} setRankingType={setRankingType} rankings={displayRankings} onSelectStock={handleSelectStock} />}
-        {section === "news" && <NewsPage news={news?.items ?? []} announcements={announcements?.items ?? []} />}
-        {section === "predictions" && <PredictionsPage horizon={horizon} setHorizon={setHorizon} predictions={displayPredictions} onSelectStock={handleSelectStock} />}
-        {section === "watchlist" && <WatchlistPage stocks={displayWatchlist} codes={[...(watchlist?.codes ?? []), ...poolStocks.map((item) => item.code)]} onSelectStock={handleSelectStock} />}
+        <ErrorBoundary key={`${section}-${selectedCode}`}>
+          {section === "overview" && <OverviewPage overview={overview} stocks={displayStocks} sectors={overview?.hot_sectors ?? sectors?.items ?? []} onSelectStock={handleSelectStock} />}
+          {section === "sectors" && <SectorsPage sectors={sectors?.items ?? []} stocks={displayStocks} onSelectStock={handleSelectStock} />}
+          {section === "stocks" && (
+            <StocksPage
+              stocks={displayStocks}
+              detail={detail}
+              watchCodes={watchlist?.codes ?? []}
+              onSelectStock={handleSelectStock}
+              onAddWatch={async (code) => {
+                await api.addWatch(code);
+                setWatchlist(await api.watchlist());
+              }}
+              onRemoveWatch={async (code) => {
+                await api.removeWatch(code);
+                setWatchlist(await api.watchlist());
+              }}
+            />
+          )}
+          {section === "rankings" && <RankingsPage rankingType={rankingType} setRankingType={setRankingType} rankings={displayRankings} onSelectStock={handleSelectStock} />}
+          {section === "news" && <NewsPage news={news?.items ?? []} announcements={announcements?.items ?? []} />}
+          {section === "predictions" && <PredictionsPage horizon={horizon} setHorizon={setHorizon} predictions={displayPredictions} onSelectStock={handleSelectStock} />}
+          {section === "watchlist" && <WatchlistPage stocks={displayWatchlist} codes={[...(watchlist?.codes ?? []), ...poolStocks.map((item) => item.code)]} onSelectStock={handleSelectStock} />}
+        </ErrorBoundary>
       </main>
     </div>
   );
@@ -444,24 +450,24 @@ function StocksPage({
             <div className="quoteHead">
               <div>
                 <h2>{detail.quote.name}</h2>
-                <span>{detail.quote.code} · {detail.quote.sector}</span>
+                <span>{[detail.quote.market, detail.quote.code, detail.quote.sector].filter(Boolean).join(" · ")}</span>
               </div>
-              <strong className={detail.quote.change_pct >= 0 ? "up" : "down"}>{formatPct(detail.quote.change_pct)}</strong>
+              <strong className={num(detail.quote.change_pct) >= 0 ? "up" : "down"}>{formatPct(num(detail.quote.change_pct))}</strong>
             </div>
-            <LineChart data={detail.history} height={240} color="#8a5a00" />
+            <LineChart data={detail.history ?? []} height={240} color="#8a5a00" />
             <div className="quoteStats">
-              <span>最新价 <b>{detail.quote.price}</b></span>
-              <span>成交额 <b>{formatAmount(detail.quote.amount)}</b></span>
-              <span>换手率 <b>{formatPct(detail.quote.turnover_rate)}</b></span>
-              <span>量比 <b>{detail.quote.volume_ratio.toFixed(2)}</b></span>
-              <span>PE <b>{detail.quote.pe.toFixed(1)}</b></span>
-              <span>PB <b>{detail.quote.pb.toFixed(1)}</b></span>
+              <span>最新价 <b>{formatNumber(detail.quote.price, 2)}</b></span>
+              <span>成交额 <b>{formatAmount(num(detail.quote.amount))}</b></span>
+              <span>换手率 <b>{formatPct(num(detail.quote.turnover_rate))}</b></span>
+              <span>量比 <b>{formatNumber(detail.quote.volume_ratio, 2)}</b></span>
+              <span>PE <b>{formatNumber(detail.quote.pe, 1)}</b></span>
+              <span>PB <b>{formatNumber(detail.quote.pb, 1)}</b></span>
             </div>
             {detail.quote.stale && <div className="staleBadge">当前展示最近可用数据，请关注更新时间</div>}
             <ProfileBlock detail={detail} />
-            <PredictionMini predictions={detail.predictions} />
-            <RelatedList title="相关新闻" items={detail.news.map((item) => item.title)} />
-            <RelatedList title="公告" items={detail.announcements.map((item) => item.title)} />
+            <PredictionMini predictions={detail.predictions ?? []} />
+            <RelatedList title="相关新闻" items={(detail.news ?? []).map((item) => item.title)} />
+            <RelatedList title="公告" items={(detail.announcements ?? []).map((item) => item.title)} />
           </>
         ) : (
           <EmptyState text="选择股票后显示详情" />
@@ -645,7 +651,7 @@ function StockTable({
           {stocks.map((item) => {
             const watched = watchCodes.includes(item.code);
             return (
-              <tr key={item.code} onClick={() => onSelectStock?.(item.code)}>
+              <tr key={stockKey(item)} onClick={() => onSelectStock?.(item.code)}>
                 <td>{item.code}</td>
                 <td>
                   <button
@@ -659,12 +665,12 @@ function StockTable({
                   </button>
                 </td>
                 <td>{themeLabels[item.theme] ?? "市场"} / {item.sector || "未分组"}</td>
-                <td>{item.price?.toFixed(2)}</td>
-                <td className={item.change_pct >= 0 ? "up" : "down"}>{formatPct(item.change_pct)}</td>
-                <td>{formatAmount(item.amount)}</td>
-                {!compact && <td>{formatPct(item.turnover_rate)}</td>}
-                {!compact && <td>{item.volume_ratio?.toFixed(2)}</td>}
-                {!compact && <td>{item.pe?.toFixed(1)} / {item.pb?.toFixed(1)}</td>}
+                <td>{formatNumber(item.price, 2)}</td>
+                <td className={num(item.change_pct) >= 0 ? "up" : "down"}>{formatPct(num(item.change_pct))}</td>
+                <td>{formatAmount(num(item.amount))}</td>
+                {!compact && <td>{formatPct(num(item.turnover_rate))}</td>}
+                {!compact && <td>{formatNumber(item.volume_ratio, 2)}</td>}
+                {!compact && <td>{formatNumber(item.pe, 1)} / {formatNumber(item.pb, 1)}</td>}
                 {onAddWatch && (
                   <td>
                     <button
@@ -814,7 +820,7 @@ function loadSamplePool(): StockDetail[] {
 }
 
 function mergeStocks(primary: Stock[], extra: Stock[]) {
-  return Array.from(new Map([...extra, ...primary].map((item) => [item.code, item])).values());
+  return Array.from(new Map([...extra, ...primary].map((item) => [stockKey(item), item])).values());
 }
 
 function mergePredictions(primary: Prediction[], pool: StockDetail[]) {
@@ -848,4 +854,36 @@ function sectionTitle(section: Section) {
       watchlist: "自选股"
     } satisfies Record<Section, string>
   )[section];
+}
+
+function num(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatNumber(value: unknown, digits = 2) {
+  return num(value).toFixed(digits);
+}
+
+function stockKey(stock: Pick<Stock, "code" | "market">) {
+  return `${stock.market || ""}:${stock.code}`;
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { message: string | null }> {
+  state = { message: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { message: error.message || "页面渲染失败" };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Page render failed", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.message) {
+      return <div className="errorBoundary">页面局部渲染失败：{this.state.message}</div>;
+    }
+    return this.props.children;
+  }
 }

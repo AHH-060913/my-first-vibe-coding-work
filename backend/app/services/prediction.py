@@ -9,6 +9,7 @@ import pandas as pd
 
 from .. import database
 from .market import MarketService
+from .providers import normalize_symbol
 
 
 @dataclass
@@ -43,12 +44,13 @@ class PredictionService:
     def __init__(self, market: MarketService | None = None) -> None:
         self.market = market or MarketService()
 
-    def predictions(self, code: str | None = None, theme: str | None = None, horizon: int = 3) -> dict[str, Any]:
+    def predictions(self, code: str | None = None, theme: str | None = None, horizon: int = 3, market: str = "") -> dict[str, Any]:
         horizon = horizon if horizon in {1, 3, 5} else 3
         stocks_payload = self.market.get_stocks(theme=theme, page_size=80, sort="amount")
         stocks = stocks_payload["items"]
         if code:
-            detail = self.market.stock_detail(code.zfill(6))
+            normalized, normalized_market = normalize_symbol(code, market)
+            detail = self.market.stock_detail(normalized, normalized_market)
             candidate = detail["quote"]
             if not any(item["code"] == candidate["code"] for item in stocks):
                 stocks = [candidate] + stocks

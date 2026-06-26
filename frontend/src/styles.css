@@ -240,6 +240,11 @@ nav button:hover {
   background: #ffffff;
 }
 
+.emptySearch {
+  color: #667085;
+  font-size: 14px;
+}
+
 .searchResultList {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -306,6 +311,14 @@ nav button:hover {
   border-radius: 8px;
   color: #9d241d;
   background: #fff0ef;
+}
+
+.errorBoundary {
+  margin-bottom: 16px;
+}
+
+.errorBoundary p {
+  margin: 0;
 }
 
 .pageGrid {
