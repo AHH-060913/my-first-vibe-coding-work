@@ -50,13 +50,29 @@ class MarketService:
         return self._cached("indices:spot", self.client.index_spot)
 
     def sectors(self) -> tuple[list[dict[str, Any]], str, str]:
-        return self._cached("sectors:all", self.client.sectors)
+        return self._cached("sectors:all", self.client.sectors, ttl_seconds=5 * 60)
 
     def news(self) -> tuple[list[dict[str, Any]], str, str]:
-        return self._cached("news:all", self.client.news)
+        return self._cached("news:all", self.client.news, ttl_seconds=3 * 60)
 
     def announcements(self) -> tuple[list[dict[str, Any]], str, str]:
-        return self._cached("announcements:all", self.client.announcements)
+        return self._cached("announcements:all", self.client.announcements, ttl_seconds=10 * 60)
+
+    def stock_history(self, code: str) -> tuple[list[dict[str, Any]], str, str]:
+        normalized, normalized_market = normalize_symbol(code)
+        return self._cached(
+            f"stock:history:{normalized_market}:{normalized}",
+            lambda: self.client.stock_history(normalized),
+            ttl_seconds=5 * 60,
+        )
+
+    def index_history(self, code: str) -> tuple[list[dict[str, Any]], str, str]:
+        normalized = normalize_code(code)
+        return self._cached(
+            f"index:history:{normalized}",
+            lambda: self.client.index_history(normalized),
+            ttl_seconds=10 * 60,
+        )
 
     def overview(self) -> dict[str, Any]:
         stocks, stock_source, stock_updated = self.stocks()
@@ -69,7 +85,7 @@ class MarketService:
         hot_sectors = sorted(sectors, key=lambda item: (item.get("change_pct") or 0, item.get("amount") or 0), reverse=True)[:8]
         index_history: list[dict[str, Any]] = []
         if indices:
-            index_history, _ = self.client.index_history(indices[0]["code"])
+            index_history, _, _ = self.index_history(indices[0]["code"])
         return {
             "updated_at": stock_updated,
             "source": f"{stock_source}; {index_source}; {sector_source}",
@@ -132,7 +148,7 @@ class MarketService:
 
     def _resolve_stock_uncached(self, code: str, market: str = "") -> dict[str, Any]:
         quote, quote_source = self.provider.quote(code, market)
-        history, history_source = self.client.stock_history(code)
+        history, history_source, _ = self.stock_history(code)
         if quote.get("price") and history_source.startswith("seed") and not any(point.get("date") for point in history[-3:]):
             history = self.provider.synthetic_history(code, quote.get("price"), market)
         elif quote.get("price") and history_source.startswith("seed"):
@@ -171,7 +187,7 @@ class MarketService:
             resolved = self.resolve_stock(normalized, normalized_market)
             return resolved
         quote["market"] = quote.get("market") or normalized_market
-        history, history_source = self.client.stock_history(normalized)
+        history, history_source, _ = self.stock_history(normalized)
         profile, profile_source, _ = self._profile(normalized, quote.get("name", ""), normalized_market)
         news, _, _ = self.news()
         announcements, _, _ = self.announcements()

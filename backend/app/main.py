@@ -14,6 +14,8 @@ from .services.prediction import PredictionService
 from .services.providers import normalize_symbol
 
 settings = get_settings()
+_market_service = MarketService()
+_prediction_service = PredictionService(_market_service)
 
 
 @asynccontextmanager
@@ -38,11 +40,11 @@ class WatchlistItem(BaseModel):
 
 
 def market_service() -> MarketService:
-    return MarketService()
+    return _market_service
 
 
 def prediction_service() -> PredictionService:
-    return PredictionService(market_service())
+    return _prediction_service
 
 
 @app.get("/api/health")
@@ -73,18 +75,22 @@ def search_stocks(q: str = Query("", min_length=1)) -> dict[str, Any]:
 
 
 @app.get("/api/stocks/{code}")
-def stock_detail(code: str, market: str = "") -> dict[str, Any]:
+def stock_detail(code: str, market: str = "", include_predictions: bool = True) -> dict[str, Any]:
     normalized, normalized_market = normalize_symbol(code, market)
     detail = market_service().stock_detail(normalized, normalized_market)
-    detail["predictions"] = prediction_service().predictions(code=normalized, market=normalized_market)["items"]
+    detail["predictions"] = (
+        prediction_service().prediction_for_detail(detail)["items"] if include_predictions else []
+    )
     return detail
 
 
 @app.get("/api/stocks/{code}/resolve")
-def resolve_stock(code: str, market: str = "") -> dict[str, Any]:
+def resolve_stock(code: str, market: str = "", include_predictions: bool = True) -> dict[str, Any]:
     normalized, normalized_market = normalize_symbol(code, market)
     detail = market_service().resolve_stock(normalized, normalized_market)
-    detail["predictions"] = prediction_service().predictions(code=normalized, market=normalized_market)["items"]
+    detail["predictions"] = (
+        prediction_service().prediction_for_detail(detail)["items"] if include_predictions else []
+    )
     return detail
 
 

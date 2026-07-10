@@ -66,6 +66,16 @@ class PredictionService:
             "updated_at": stocks_payload["updated_at"],
         }
 
+    def prediction_for_detail(self, detail: dict[str, Any], horizon: int = 3) -> dict[str, Any]:
+        horizon = horizon if horizon in {1, 3, 5} else 3
+        result = self._predict_stock(detail["quote"], horizon, detail.get("history") or []).as_dict()
+        database.save_prediction(result["code"], result["horizon"], result)
+        return {
+            "items": [result],
+            "source": "local:hist_gradient_boosting_or_factor_fallback",
+            "updated_at": detail.get("updated_at", ""),
+        }
+
     def ranking(self, horizon: int = 3) -> dict[str, Any]:
         payload = self.predictions(horizon=horizon)
         payload["type"] = "model_score"

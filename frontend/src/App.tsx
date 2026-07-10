@@ -1,9 +1,10 @@
-import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import {
   Activity,
   BarChart3,
   Bell,
   Database,
+  GitCompareArrows,
   Layers,
   LineChart as LineChartIcon,
   Newspaper,
@@ -11,14 +12,18 @@ import {
   Search,
   ShieldAlert,
   Star,
-  TrendingUp
+  TrendingUp,
+  X
 } from "lucide-react";
 import { api } from "./api";
-import { LineChart, SectorBarChart } from "./components/Charts";
 import { formatAmount, formatDateTime, formatPct, probability } from "./format";
-import type { Announcement, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, StockSearchResult, ThemeKey } from "./types";
+import type { Announcement, HistoryPoint, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, StockSearchResult, ThemeKey } from "./types";
 
-type Section = "overview" | "sectors" | "stocks" | "rankings" | "news" | "predictions" | "watchlist";
+const LazyLineChart = lazy(() => import("./components/Charts").then((module) => ({ default: module.LineChart })));
+const LazySectorBarChart = lazy(() => import("./components/Charts").then((module) => ({ default: module.SectorBarChart })));
+const LazyComparisonLineChart = lazy(() => import("./components/Charts").then((module) => ({ default: module.ComparisonLineChart })));
+
+type Section = "overview" | "sectors" | "stocks" | "compare" | "rankings" | "news" | "predictions" | "watchlist";
 type RankingType = "gainers" | "losers" | "turnover" | "volume_ratio" | "hot_sector" | "model_score";
 
 const themeLabels: Record<string, string> = {
@@ -33,6 +38,7 @@ const navItems: Array<{ key: Section; label: string; icon: typeof Activity }> = 
   { key: "overview", label: "总览", icon: Activity },
   { key: "sectors", label: "行业主题", icon: Layers },
   { key: "stocks", label: "个股行情", icon: LineChartIcon },
+  { key: "compare", label: "股票对比", icon: GitCompareArrows },
   { key: "rankings", label: "排行榜", icon: BarChart3 },
   { key: "news", label: "新闻公告", icon: Newspaper },
   { key: "predictions", label: "模型预测", icon: TrendingUp },
@@ -49,6 +55,8 @@ const rankingLabels: Record<RankingType, string> = {
 };
 
 const SAMPLE_POOL_KEY = "a-share-sample-pool";
+const COMPARE_POOL_KEY = "a-share-compare-pool";
+const MAX_COMPARE = 5;
 
 export default function App() {
   const [section, setSection] = useState<Section>("overview");
@@ -69,9 +77,16 @@ export default function App() {
   const [searchMessage, setSearchMessage] = useState("");
   const [searching, setSearching] = useState(false);
   const [selectedCode, setSelectedCode] = useState("300750");
+  const [selectedMarket, setSelectedMarket] = useState("SZ");
   const [detail, setDetail] = useState<StockDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [compareKeys, setCompareKeys] = useState<string[]>(loadCompareKeys);
+  const [compareDetails, setCompareDetails] = useState<StockDetail[]>([]);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareMessage, setCompareMessage] = useState("");
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const loadSequence = useRef(0);
 
   const themes = overview?.themes ?? [
     { key: "tech" as ThemeKey, label: "科技", keywords: [], boards: [] },
@@ -80,63 +95,94 @@ export default function App() {
     { key: "pv" as ThemeKey, label: "光伏", keywords: [], boards: [] }
   ];
 
-  const loadAll = useCallback(async () => {
+  const loadCurrent = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError(null);
     try {
       const stockParams = new URLSearchParams({ page_size: "40", sort: "change_pct", order: "desc" });
       if (theme) stockParams.set("theme", theme);
 
-      const newsParams = new URLSearchParams();
-      if (theme) newsParams.set("theme", theme);
-      if (query && section === "news") newsParams.set("q", query);
-
-      const announcementParams = new URLSearchParams();
-      if (query && section === "news") announcementParams.set("q", query);
-
-      const predictionParams = new URLSearchParams({ horizon: String(horizon) });
-      if (theme) predictionParams.set("theme", theme);
-
-      const [overviewData, stocksData, sectorData, rankingData, newsData, announcementData, predictionData, watchData] =
-        await Promise.all([
-          api.overview(),
-          api.stocks(stockParams),
-          api.sectors(theme || undefined),
-          api.rankings(rankingType),
-          api.news(newsParams),
-          api.announcements(announcementParams),
-          api.predictions(predictionParams),
-          api.watchlist()
-        ]);
-      setOverview(overviewData);
-      setStocks(stocksData);
-      setSectors(sectorData);
-      setRankings(rankingData);
-      setNews(newsData);
-      setAnnouncements(announcementData);
-      setPredictions(predictionData);
-      setWatchlist(watchData);
+      if (section === "overview") {
+        const [overviewData, stocksData] = await Promise.all([api.overview(), api.stocks(stockParams)]);
+        if (sequence !== loadSequence.current) return;
+        setOverview(overviewData);
+        setStocks(stocksData);
+      } else if (section === "sectors") {
+        const [sectorData, stocksData] = await Promise.all([api.sectors(theme || undefined), api.stocks(stockParams)]);
+        if (sequence !== loadSequence.current) return;
+        setSectors(sectorData);
+        setStocks(stocksData);
+      } else if (section === "stocks") {
+        const [stocksData, watchData] = await Promise.all([api.stocks(stockParams), api.watchlist()]);
+        if (sequence !== loadSequence.current) return;
+        setStocks(stocksData);
+        setWatchlist(watchData);
+      } else if (section === "compare") {
+        const stocksData = await api.stocks(stockParams);
+        if (sequence !== loadSequence.current) return;
+        setStocks(stocksData);
+      } else if (section === "rankings") {
+        const rankingData = await api.rankings(rankingType);
+        if (sequence !== loadSequence.current) return;
+        setRankings(rankingData);
+      } else if (section === "news") {
+        const newsParams = new URLSearchParams();
+        if (theme) newsParams.set("theme", theme);
+        const [newsData, announcementData] = await Promise.all([api.news(newsParams), api.announcements(new URLSearchParams())]);
+        if (sequence !== loadSequence.current) return;
+        setNews(newsData);
+        setAnnouncements(announcementData);
+      } else if (section === "predictions") {
+        const predictionParams = new URLSearchParams({ horizon: String(horizon) });
+        if (theme) predictionParams.set("theme", theme);
+        const predictionData = await api.predictions(predictionParams);
+        if (sequence !== loadSequence.current) return;
+        setPredictions(predictionData);
+      } else if (section === "watchlist") {
+        const watchData = await api.watchlist();
+        if (sequence !== loadSequence.current) return;
+        setWatchlist(watchData);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "数据加载失败");
+      if (sequence === loadSequence.current) setError(err instanceof Error ? err.message : "数据加载失败");
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [horizon, query, rankingType, section, theme]);
+  }, [horizon, rankingType, refreshVersion, section, theme]);
 
   useEffect(() => {
-    loadAll();
-  }, [loadAll]);
+    loadCurrent();
+  }, [loadCurrent]);
+
+  const refreshCurrent = useCallback(() => {
+    api.clearCache();
+    setRefreshVersion((value) => value + 1);
+  }, []);
 
   useEffect(() => {
+    if (section !== "stocks") return;
     let active = true;
-    const localDetail = samplePool.find((item) => item.quote.code === selectedCode);
+    const selectedKey = stockKey({ code: selectedCode, market: selectedMarket });
+    const localDetail = samplePool.find((item) => stockKey(item.quote) === selectedKey);
     if (localDetail) {
       setDetail(localDetail);
+    } else {
+      setDetail(null);
     }
     api
-      .stockDetail(selectedCode)
+      .stockDetail(selectedCode, selectedMarket, false)
       .then((payload) => {
-        if (active) setDetail(payload);
+        if (!active) return;
+        setDetail((current) => ({
+          ...payload,
+          predictions: current && stockKey(current.quote) === selectedKey ? current.predictions ?? [] : []
+        }));
+        const predictionParams = new URLSearchParams({ code: selectedCode, horizon: "3" });
+        api.predictions(predictionParams).then((predictionPayload) => {
+          if (!active) return;
+          setDetail((current) => current && stockKey(current.quote) === selectedKey ? { ...current, predictions: predictionPayload.items } : current);
+        }).catch(() => undefined);
       })
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : "个股详情加载失败");
@@ -144,7 +190,38 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [samplePool, selectedCode]);
+  }, [samplePool, section, selectedCode, selectedMarket]);
+
+  useEffect(() => {
+    if (section !== "compare") return;
+    let active = true;
+    const refs = compareKeys.map(parseStockKey).filter((item) => item.code);
+    const localByKey = new Map(samplePool.map((item) => [stockKey(item.quote), item]));
+    const localDetails = refs.map((item) => localByKey.get(stockKey(item))).filter((item): item is StockDetail => Boolean(item));
+    if (localDetails.length) setCompareDetails(localDetails);
+    if (!refs.length) {
+      setCompareDetails([]);
+      setCompareLoading(false);
+      return;
+    }
+    setCompareLoading(true);
+    setCompareMessage("");
+    Promise.allSettled(refs.map((item) => api.stockDetail(item.code, item.market, false)))
+      .then((results) => {
+        if (!active) return;
+        const resolved = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+        const resolvedByKey = new Map([...localDetails, ...resolved].map((item) => [stockKey(item.quote), item]));
+        setCompareDetails(refs.map((item) => resolvedByKey.get(stockKey(item))).filter((item): item is StockDetail => Boolean(item)));
+        const failed = results.filter((result) => result.status === "rejected").length;
+        if (failed) setCompareMessage(`${failed} 只股票暂未取得最新详情，已保留其他可用数据。`);
+      })
+      .finally(() => {
+        if (active) setCompareLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [compareKeys, samplePool, section]);
 
   const persistSamplePool = useCallback((next: StockDetail[]) => {
     const unique = Array.from(new Map(next.map((item) => [stockKey(item.quote), item])).values());
@@ -175,9 +252,10 @@ export default function App() {
       setSearching(true);
       setError(null);
       try {
-        const resolved = await api.resolveStock(result.code, result.market);
+        const resolved = await api.resolveStock(result.code, result.market, false);
         persistSamplePool([resolved, ...samplePool]);
         setSelectedCode(resolved.quote.code);
+        setSelectedMarket(resolved.quote.market || result.market);
         setSection("stocks");
       } catch (err) {
         setError(err instanceof Error ? err.message : "添加股票失败");
@@ -188,10 +266,27 @@ export default function App() {
     [persistSamplePool, samplePool]
   );
 
-  const handleSelectStock = useCallback((code: string) => {
+  const handleSelectStock = useCallback((code: string, market?: string) => {
     setSelectedCode(code);
+    setSelectedMarket(market || inferMarket(code));
     setSection("stocks");
   }, []);
+
+  const toggleCompare = useCallback(
+    (stock: Pick<Stock, "code" | "market">) => {
+      const key = stockKey(stock);
+      const exists = compareKeys.includes(key);
+      if (!exists && compareKeys.length >= MAX_COMPARE) {
+        setCompareMessage(`最多同时比较 ${MAX_COMPARE} 只股票，请先移除一只。`);
+        return;
+      }
+      const next = exists ? compareKeys.filter((item) => item !== key) : [...compareKeys, key];
+      setCompareKeys(next);
+      setCompareMessage("");
+      window.localStorage.setItem(COMPARE_POOL_KEY, JSON.stringify(next));
+    },
+    [compareKeys]
+  );
 
   const poolStocks = useMemo(() => samplePool.map((item) => item.quote), [samplePool]);
   const displayStocks = useMemo(() => mergeStocks(stocks?.items ?? [], poolStocks), [poolStocks, stocks]);
@@ -223,6 +318,7 @@ export default function App() {
               <button key={item.key} className={section === item.key ? "active" : ""} onClick={() => setSection(item.key)}>
                 <Icon size={18} />
                 <span>{item.label}</span>
+                {item.key === "compare" && <small className="navCount">{compareKeys.length}</small>}
               </button>
             );
           })}
@@ -254,7 +350,7 @@ export default function App() {
             <button className="searchAction" onClick={runOnlineSearch} disabled={searching}>
               {searching ? "搜索中" : "在线搜索"}
             </button>
-            <button className="iconButton" onClick={loadAll} title="刷新数据" aria-label="刷新数据">
+            <button className="iconButton" onClick={refreshCurrent} title="刷新当前页面数据" aria-label="刷新当前页面数据">
               <RefreshCw size={18} className={loading ? "spin" : ""} />
             </button>
           </div>
@@ -296,15 +392,28 @@ export default function App() {
         </div>
 
         {error && <div className="error">{error}</div>}
-        <ErrorBoundary key={`${section}-${selectedCode}`}>
-          {section === "overview" && <OverviewPage overview={overview} stocks={displayStocks} sectors={overview?.hot_sectors ?? sectors?.items ?? []} onSelectStock={handleSelectStock} />}
-          {section === "sectors" && <SectorsPage sectors={sectors?.items ?? []} stocks={displayStocks} onSelectStock={handleSelectStock} />}
+        <ErrorBoundary key={`${section}-${selectedMarket}-${selectedCode}`}>
+          {section === "overview" && (
+            <OverviewPage
+              overview={overview}
+              stocks={displayStocks}
+              sectors={overview?.hot_sectors ?? sectors?.items ?? []}
+              onSelectStock={handleSelectStock}
+              compareKeys={compareKeys}
+              onToggleCompare={toggleCompare}
+            />
+          )}
+          {section === "sectors" && (
+            <SectorsPage sectors={sectors?.items ?? []} stocks={displayStocks} onSelectStock={handleSelectStock} compareKeys={compareKeys} onToggleCompare={toggleCompare} />
+          )}
           {section === "stocks" && (
             <StocksPage
               stocks={displayStocks}
               detail={detail}
               watchCodes={watchlist?.codes ?? []}
               onSelectStock={handleSelectStock}
+              compareKeys={compareKeys}
+              onToggleCompare={toggleCompare}
               onAddWatch={async (code) => {
                 await api.addWatch(code);
                 setWatchlist(await api.watchlist());
@@ -315,17 +424,87 @@ export default function App() {
               }}
             />
           )}
-          {section === "rankings" && <RankingsPage rankingType={rankingType} setRankingType={setRankingType} rankings={displayRankings} onSelectStock={handleSelectStock} />}
+          {section === "compare" && (
+            <ComparePage
+              details={compareDetails}
+              candidates={displayStocks}
+              compareKeys={compareKeys}
+              loading={compareLoading}
+              message={compareMessage}
+              onToggleCompare={toggleCompare}
+              onSelectStock={handleSelectStock}
+            />
+          )}
+          {section === "rankings" && (
+            <RankingsPage
+              rankingType={rankingType}
+              setRankingType={setRankingType}
+              rankings={displayRankings}
+              onSelectStock={handleSelectStock}
+              compareKeys={compareKeys}
+              onToggleCompare={toggleCompare}
+            />
+          )}
           {section === "news" && <NewsPage news={news?.items ?? []} announcements={announcements?.items ?? []} />}
           {section === "predictions" && <PredictionsPage horizon={horizon} setHorizon={setHorizon} predictions={displayPredictions} onSelectStock={handleSelectStock} />}
-          {section === "watchlist" && <WatchlistPage stocks={displayWatchlist} codes={[...(watchlist?.codes ?? []), ...poolStocks.map((item) => item.code)]} onSelectStock={handleSelectStock} />}
+          {section === "watchlist" && (
+            <WatchlistPage
+              stocks={displayWatchlist}
+              codes={[...(watchlist?.codes ?? []), ...poolStocks.map((item) => item.code)]}
+              onSelectStock={handleSelectStock}
+              compareKeys={compareKeys}
+              onToggleCompare={toggleCompare}
+            />
+          )}
         </ErrorBoundary>
       </main>
     </div>
   );
 }
 
-function OverviewPage({ overview, stocks, sectors, onSelectStock }: { overview: Overview | null; stocks: Stock[]; sectors: Sector[]; onSelectStock: (code: string) => void }) {
+function ChartFallback({ height }: { height: number }) {
+  return <div className="chartPlaceholder" style={{ height }}><RefreshCw size={18} className="spin" /></div>;
+}
+
+function DeferredLineChart({ data, height = 260, color }: { data: HistoryPoint[]; height?: number; color?: string }) {
+  return (
+    <Suspense fallback={<ChartFallback height={height} />}>
+      <LazyLineChart data={data} height={height} color={color} />
+    </Suspense>
+  );
+}
+
+function DeferredSectorBarChart({ data, height = 260 }: { data: Sector[]; height?: number }) {
+  return (
+    <Suspense fallback={<ChartFallback height={height} />}>
+      <LazySectorBarChart data={data} height={height} />
+    </Suspense>
+  );
+}
+
+function DeferredComparisonLineChart({ details, days, height = 360 }: { details: StockDetail[]; days: number; height?: number }) {
+  return (
+    <Suspense fallback={<ChartFallback height={height} />}>
+      <LazyComparisonLineChart details={details} days={days} height={height} />
+    </Suspense>
+  );
+}
+
+function OverviewPage({
+  overview,
+  stocks,
+  sectors,
+  onSelectStock,
+  compareKeys,
+  onToggleCompare
+}: {
+  overview: Overview | null;
+  stocks: Stock[];
+  sectors: Sector[];
+  onSelectStock: (code: string, market?: string) => void;
+  compareKeys: string[];
+  onToggleCompare: (stock: Pick<Stock, "code" | "market">) => void;
+}) {
   const topStocks = stocks.slice(0, 6);
   const amount = overview?.total_amount ?? stocks.reduce((sum, item) => sum + (item.amount || 0), 0);
   const breadth = overview?.breadth ?? { up: 0, down: 0, flat: 0, total: 0 };
@@ -364,7 +543,7 @@ function OverviewPage({ overview, stocks, sectors, onSelectStock }: { overview: 
             <span>样本</span>
           </div>
         </div>
-        {overview?.index_history?.length ? <LineChart data={overview.index_history} height={250} /> : <EmptyState text="等待指数历史数据" />}
+        {overview?.index_history?.length ? <DeferredLineChart data={overview.index_history} height={250} /> : <EmptyState text="等待指数历史数据" />}
       </div>
 
       <div className="panel oneThird">
@@ -372,7 +551,7 @@ function OverviewPage({ overview, stocks, sectors, onSelectStock }: { overview: 
           <h2>热门板块</h2>
           <span>涨跌幅排序</span>
         </div>
-        <SectorBarChart data={sectors} height={300} />
+        <DeferredSectorBarChart data={sectors} height={300} />
       </div>
 
       <div className="panel full">
@@ -380,13 +559,25 @@ function OverviewPage({ overview, stocks, sectors, onSelectStock }: { overview: 
           <h2>强势个股</h2>
           <span>按涨跌幅</span>
         </div>
-        <StockTable stocks={topStocks} compact onSelectStock={onSelectStock} />
+        <StockTable stocks={topStocks} compact onSelectStock={onSelectStock} compareKeys={compareKeys} onToggleCompare={onToggleCompare} />
       </div>
     </section>
   );
 }
 
-function SectorsPage({ sectors, stocks, onSelectStock }: { sectors: Sector[]; stocks: Stock[]; onSelectStock: (code: string) => void }) {
+function SectorsPage({
+  sectors,
+  stocks,
+  onSelectStock,
+  compareKeys,
+  onToggleCompare
+}: {
+  sectors: Sector[];
+  stocks: Stock[];
+  onSelectStock: (code: string, market?: string) => void;
+  compareKeys: string[];
+  onToggleCompare: (stock: Pick<Stock, "code" | "market">) => void;
+}) {
   return (
     <section className="pageGrid">
       <div className="panel twoThird">
@@ -394,7 +585,7 @@ function SectorsPage({ sectors, stocks, onSelectStock }: { sectors: Sector[]; st
           <h2>主题热度</h2>
           <span>{sectors.length} 个板块</span>
         </div>
-        <SectorBarChart data={sectors} height={360} />
+        <DeferredSectorBarChart data={sectors} height={360} />
       </div>
       <div className="sectorCards">
         {sectors.slice(0, 8).map((item) => (
@@ -414,7 +605,7 @@ function SectorsPage({ sectors, stocks, onSelectStock }: { sectors: Sector[]; st
           <h2>主题成分观察</h2>
           <span>点击行查看详情</span>
         </div>
-        <StockTable stocks={stocks} onSelectStock={onSelectStock} />
+        <StockTable stocks={stocks} onSelectStock={onSelectStock} compareKeys={compareKeys} onToggleCompare={onToggleCompare} />
       </div>
     </section>
   );
@@ -425,13 +616,17 @@ function StocksPage({
   detail,
   watchCodes,
   onSelectStock,
+  compareKeys,
+  onToggleCompare,
   onAddWatch,
   onRemoveWatch
 }: {
   stocks: Stock[];
   detail: StockDetail | null;
   watchCodes: string[];
-  onSelectStock: (code: string) => void;
+  onSelectStock: (code: string, market?: string) => void;
+  compareKeys: string[];
+  onToggleCompare: (stock: Pick<Stock, "code" | "market">) => void;
   onAddWatch: (code: string) => Promise<void>;
   onRemoveWatch: (code: string) => Promise<void>;
 }) {
@@ -442,7 +637,15 @@ function StocksPage({
           <h2>个股行情</h2>
           <span>{stocks.length} 条</span>
         </div>
-        <StockTable stocks={stocks} onSelectStock={onSelectStock} watchCodes={watchCodes} onAddWatch={onAddWatch} onRemoveWatch={onRemoveWatch} />
+        <StockTable
+          stocks={stocks}
+          onSelectStock={onSelectStock}
+          watchCodes={watchCodes}
+          compareKeys={compareKeys}
+          onToggleCompare={onToggleCompare}
+          onAddWatch={onAddWatch}
+          onRemoveWatch={onRemoveWatch}
+        />
       </div>
       <aside className="detailPanel">
         {detail ? (
@@ -454,7 +657,7 @@ function StocksPage({
               </div>
               <strong className={num(detail.quote.change_pct) >= 0 ? "up" : "down"}>{formatPct(num(detail.quote.change_pct))}</strong>
             </div>
-            <LineChart data={detail.history ?? []} height={240} color="#8a5a00" />
+            <DeferredLineChart data={detail.history ?? []} height={240} color="#8a5a00" />
             <div className="quoteStats">
               <span>最新价 <b>{formatNumber(detail.quote.price, 2)}</b></span>
               <span>成交额 <b>{formatAmount(num(detail.quote.amount))}</b></span>
@@ -477,16 +680,186 @@ function StocksPage({
   );
 }
 
+function ComparePage({
+  details,
+  candidates,
+  compareKeys,
+  loading,
+  message,
+  onToggleCompare,
+  onSelectStock
+}: {
+  details: StockDetail[];
+  candidates: Stock[];
+  compareKeys: string[];
+  loading: boolean;
+  message: string;
+  onToggleCompare: (stock: Pick<Stock, "code" | "market">) => void;
+  onSelectStock: (code: string, market?: string) => void;
+}) {
+  const [days, setDays] = useState(60);
+  const selected = new Set(compareKeys);
+  const available = candidates.filter((item) => !selected.has(stockKey(item)));
+  const stockByKey = new Map<string, Stock>();
+  candidates.forEach((item) => stockByKey.set(stockKey(item), item));
+  details.forEach((item) => stockByKey.set(stockKey(item.quote), item.quote));
+  const statsByKey = new Map(details.map((item) => [stockKey(item.quote), comparisonStats(item, days)]));
+  const enough = compareKeys.length >= 2;
+
+  return (
+    <section className="pageGrid comparePage">
+      <div className="panel full compareSelector">
+        <div className="panelHead">
+          <div>
+            <h2>对比标的</h2>
+            <span>{compareKeys.length} / {MAX_COMPARE} 只</span>
+          </div>
+          <select
+            aria-label="添加股票到对比"
+            value=""
+            disabled={!available.length || compareKeys.length >= MAX_COMPARE}
+            onChange={(event) => {
+              const stock = stockByKey.get(event.target.value);
+              if (stock) onToggleCompare(stock);
+            }}
+          >
+            <option value="">添加股票到对比</option>
+            {available.map((item) => (
+              <option key={stockKey(item)} value={stockKey(item)}>{item.name} · {item.code}</option>
+            ))}
+          </select>
+        </div>
+        <div className="compareChips">
+          {compareKeys.map((key) => {
+            const ref = parseStockKey(key);
+            const stock = stockByKey.get(key);
+            return (
+              <button key={key} onClick={() => onToggleCompare(stock ?? ref)} title="移出对比" aria-label={`移出 ${stock?.name || ref.code}`}>
+                <span><strong>{stock?.name || ref.code}</strong><small>{ref.market} · {ref.code}</small></span>
+                <X size={15} />
+              </button>
+            );
+          })}
+        </div>
+        {message && <p className="compareMessage">{message}</p>}
+      </div>
+
+      {!enough && <div className="panel full"><EmptyState text="至少选择 2 只股票后显示对比" /></div>}
+      {enough && loading && !details.length && <div className="panel full"><LoadingState text="正在加载对比数据" /></div>}
+
+      {enough && details.length > 0 && (
+        <>
+          <div className="compareCards full">
+            {details.map((item) => {
+              const stats = statsByKey.get(stockKey(item.quote));
+              return (
+                <article key={stockKey(item.quote)} className="compareCard">
+                  <button className="nameButton" onClick={() => onSelectStock(item.quote.code, item.quote.market)}>{item.quote.name}</button>
+                  <span>{item.quote.market || inferMarket(item.quote.code)} · {item.quote.code}</span>
+                  <strong>{formatNumber(item.quote.price, 2)}</strong>
+                  <div>
+                    <em className={num(item.quote.change_pct) >= 0 ? "up" : "down"}>今日 {formatPct(num(item.quote.change_pct))}</em>
+                    <em className={(stats?.periodReturn ?? 0) >= 0 ? "up" : "down"}>{days}日 {formatPct(stats?.periodReturn ?? 0)}</em>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="panel full">
+            <div className="panelHead">
+              <div>
+                <h2>相对收益走势</h2>
+                <span>各标的区间首日归零</span>
+              </div>
+              <div className="segmented small">
+                {[20, 60, 120].map((item) => (
+                  <button key={item} className={days === item ? "selected" : ""} onClick={() => setDays(item)}>{item}日</button>
+                ))}
+              </div>
+            </div>
+            <DeferredComparisonLineChart details={details} days={days} height={360} />
+          </div>
+
+          <div className="panel full">
+            <div className="panelHead">
+              <h2>核心指标横向比较</h2>
+              <span>行情、估值、流动性与波动</span>
+            </div>
+            <div className="tableWrap compareTable">
+              <table>
+                <thead>
+                  <tr>
+                    <th>指标</th>
+                    {details.map((item) => <th key={stockKey(item.quote)}>{item.quote.name}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  <CompareMetricRow label="最新价" details={details} render={(item) => formatNumber(item.quote.price, 2)} />
+                  <CompareMetricRow label="今日涨跌" details={details} render={(item) => formatPct(num(item.quote.change_pct))} tone={(item) => num(item.quote.change_pct)} />
+                  <CompareMetricRow label={`${days}日收益`} details={details} render={(item) => formatPct(statsByKey.get(stockKey(item.quote))?.periodReturn ?? 0)} tone={(item) => statsByKey.get(stockKey(item.quote))?.periodReturn ?? 0} />
+                  <CompareMetricRow label="年化波动" details={details} render={(item) => formatPct(statsByKey.get(stockKey(item.quote))?.volatility ?? 0)} />
+                  <CompareMetricRow label="区间最大回撤" details={details} render={(item) => formatPct(statsByKey.get(stockKey(item.quote))?.maxDrawdown ?? 0)} tone={(item) => statsByKey.get(stockKey(item.quote))?.maxDrawdown ?? 0} />
+                  <CompareMetricRow label="成交额" details={details} render={(item) => formatAmount(num(item.quote.amount))} />
+                  <CompareMetricRow label="换手率" details={details} render={(item) => formatPct(num(item.quote.turnover_rate))} />
+                  <CompareMetricRow label="量比" details={details} render={(item) => formatNumber(item.quote.volume_ratio, 2)} />
+                  <CompareMetricRow label="PE / PB" details={details} render={(item) => `${formatNumber(item.quote.pe, 1)} / ${formatNumber(item.quote.pb, 1)}`} />
+                  <CompareMetricRow label="总市值" details={details} render={(item) => formatAmount(num(item.quote.market_cap))} />
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="compareProfiles full">
+            {details.map((item) => (
+              <article key={stockKey(item.quote)}>
+                <div><strong>{item.quote.name}</strong><span>{item.profile?.industry || item.quote.sector || "暂无行业"}</span></div>
+                <p>{item.profile?.main_business || "暂无主营业务资料"}</p>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function CompareMetricRow({
+  label,
+  details,
+  render,
+  tone
+}: {
+  label: string;
+  details: StockDetail[];
+  render: (detail: StockDetail) => ReactNode;
+  tone?: (detail: StockDetail) => number;
+}) {
+  return (
+    <tr>
+      <th>{label}</th>
+      {details.map((item) => {
+        const value = tone?.(item);
+        return <td key={stockKey(item.quote)} className={value == null ? "" : value >= 0 ? "up" : "down"}>{render(item)}</td>;
+      })}
+    </tr>
+  );
+}
+
 function RankingsPage({
   rankingType,
   setRankingType,
   rankings,
-  onSelectStock
+  onSelectStock,
+  compareKeys,
+  onToggleCompare
 }: {
   rankingType: RankingType;
   setRankingType: (type: RankingType) => void;
   rankings: Array<Stock | Sector | Prediction>;
-  onSelectStock: (code: string) => void;
+  onSelectStock: (code: string, market?: string) => void;
+  compareKeys: string[];
+  onToggleCompare: (stock: Pick<Stock, "code" | "market">) => void;
 }) {
   return (
     <section className="panel">
@@ -500,7 +873,13 @@ function RankingsPage({
           ))}
         </div>
       </div>
-      {rankingType === "hot_sector" ? <SectorTable sectors={rankings as Sector[]} /> : rankingType === "model_score" ? <PredictionTable predictions={rankings as Prediction[]} onSelectStock={onSelectStock} /> : <StockTable stocks={rankings as Stock[]} onSelectStock={onSelectStock} />}
+      {rankingType === "hot_sector" ? (
+        <SectorTable sectors={rankings as Sector[]} />
+      ) : rankingType === "model_score" ? (
+        <PredictionTable predictions={rankings as Prediction[]} onSelectStock={onSelectStock} />
+      ) : (
+        <StockTable stocks={rankings as Stock[]} onSelectStock={onSelectStock} compareKeys={compareKeys} onToggleCompare={onToggleCompare} />
+      )}
     </section>
   );
 }
@@ -580,14 +959,30 @@ function PredictionsPage({ horizon, setHorizon, predictions, onSelectStock }: { 
   );
 }
 
-function WatchlistPage({ stocks, codes, onSelectStock }: { stocks: Stock[]; codes: string[]; onSelectStock: (code: string) => void }) {
+function WatchlistPage({
+  stocks,
+  codes,
+  onSelectStock,
+  compareKeys,
+  onToggleCompare
+}: {
+  stocks: Stock[];
+  codes: string[];
+  onSelectStock: (code: string, market?: string) => void;
+  compareKeys: string[];
+  onToggleCompare: (stock: Pick<Stock, "code" | "market">) => void;
+}) {
   return (
     <section className="panel">
       <div className="panelHead">
         <h2>自选股</h2>
         <span>{codes.length} 个代码</span>
       </div>
-      {stocks.length ? <StockTable stocks={stocks} onSelectStock={onSelectStock} /> : <EmptyState text="在个股行情页点击星标加入自选" />}
+      {stocks.length ? (
+        <StockTable stocks={stocks} onSelectStock={onSelectStock} compareKeys={compareKeys} onToggleCompare={onToggleCompare} />
+      ) : (
+        <EmptyState text="在个股行情页点击星标加入自选" />
+      )}
     </section>
   );
 }
@@ -620,13 +1015,17 @@ function StockTable({
   compact,
   onSelectStock,
   watchCodes = [],
+  compareKeys = [],
+  onToggleCompare,
   onAddWatch,
   onRemoveWatch
 }: {
   stocks: Stock[];
   compact?: boolean;
-  onSelectStock?: (code: string) => void;
+  onSelectStock?: (code: string, market?: string) => void;
   watchCodes?: string[];
+  compareKeys?: string[];
+  onToggleCompare?: (stock: Pick<Stock, "code" | "market">) => void;
   onAddWatch?: (code: string) => Promise<void>;
   onRemoveWatch?: (code: string) => Promise<void>;
 }) {
@@ -644,21 +1043,23 @@ function StockTable({
             {!compact && <th>换手</th>}
             {!compact && <th>量比</th>}
             {!compact && <th>PE/PB</th>}
+            {onToggleCompare && <th>对比</th>}
             {onAddWatch && <th>自选</th>}
           </tr>
         </thead>
         <tbody>
           {stocks.map((item) => {
             const watched = watchCodes.includes(item.code);
+            const compared = compareKeys.includes(stockKey(item));
             return (
-              <tr key={stockKey(item)} onClick={() => onSelectStock?.(item.code)}>
+              <tr key={stockKey(item)} onClick={() => onSelectStock?.(item.code, item.market)}>
                 <td>{item.code}</td>
                 <td>
                   <button
                     className="nameButton"
                     onClick={(event) => {
                       event.stopPropagation();
-                      onSelectStock?.(item.code);
+                      onSelectStock?.(item.code, item.market);
                     }}
                   >
                     {item.name}
@@ -671,6 +1072,21 @@ function StockTable({
                 {!compact && <td>{formatPct(num(item.turnover_rate))}</td>}
                 {!compact && <td>{formatNumber(item.volume_ratio, 2)}</td>}
                 {!compact && <td>{formatNumber(item.pe, 1)} / {formatNumber(item.pb, 1)}</td>}
+                {onToggleCompare && (
+                  <td>
+                    <button
+                      className={`compareButton ${compared ? "selected" : ""}`}
+                      title={compared ? "移出股票对比" : "加入股票对比"}
+                      aria-label={compared ? "移出股票对比" : "加入股票对比"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleCompare(item);
+                      }}
+                    >
+                      <GitCompareArrows size={16} />
+                    </button>
+                  </td>
+                )}
                 {onAddWatch && (
                   <td>
                     <button
@@ -808,6 +1224,15 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
+function LoadingState({ text }: { text: string }) {
+  return (
+    <div className="empty">
+      <RefreshCw size={18} className="spin" />
+      <span>{text}</span>
+    </div>
+  );
+}
+
 function loadSamplePool(): StockDetail[] {
   try {
     const raw = window.localStorage.getItem(SAMPLE_POOL_KEY);
@@ -817,6 +1242,21 @@ function loadSamplePool(): StockDetail[] {
   } catch {
     return [];
   }
+}
+
+function loadCompareKeys(): string[] {
+  try {
+    const raw = window.localStorage.getItem(COMPARE_POOL_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as string[];
+      if (Array.isArray(parsed)) {
+        return Array.from(new Set(parsed.map((item) => stockKey(parseStockKey(item))))).slice(0, MAX_COMPARE);
+      }
+    }
+  } catch {
+    // Fall through to the useful first-run comparison.
+  }
+  return [stockKey({ code: "300750", market: "SZ" }), stockKey({ code: "300308", market: "SZ" })];
 }
 
 function mergeStocks(primary: Stock[], extra: Stock[]) {
@@ -848,6 +1288,7 @@ function sectionTitle(section: Section) {
       overview: "市场总览",
       sectors: "行业主题",
       stocks: "个股行情",
+      compare: "多股可视化对比",
       rankings: "涨跌与热度排行",
       news: "财经新闻与公告",
       predictions: "量化模型预测",
@@ -865,8 +1306,40 @@ function formatNumber(value: unknown, digits = 2) {
   return num(value).toFixed(digits);
 }
 
+function inferMarket(code: string) {
+  if (code.length === 5) return "HK";
+  if (code.startsWith("6") || code.startsWith("9")) return "SH";
+  if (code.startsWith("4") || code.startsWith("8")) return "BJ";
+  return "SZ";
+}
+
 function stockKey(stock: Pick<Stock, "code" | "market">) {
-  return `${stock.market || ""}:${stock.code}`;
+  return `${(stock.market || inferMarket(stock.code)).toUpperCase()}:${stock.code}`;
+}
+
+function parseStockKey(value: string): { code: string; market: string } {
+  const [market = "", code = value] = value.includes(":") ? value.split(":", 2) : ["", value];
+  return { code, market: (market || inferMarket(code)).toUpperCase() };
+}
+
+function comparisonStats(detail: StockDetail, days: number) {
+  const closes = (detail.history ?? [])
+    .filter((item) => Number(item.close) > 0)
+    .slice(-days)
+    .map((item) => Number(item.close));
+  if (closes.length < 2) return { periodReturn: 0, volatility: 0, maxDrawdown: 0 };
+  const periodReturn = ((closes[closes.length - 1] / closes[0]) - 1) * 100;
+  const returns = closes.slice(1).map((value, index) => (value / closes[index]) - 1);
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const variance = returns.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / returns.length;
+  const volatility = Math.sqrt(variance) * Math.sqrt(252) * 100;
+  let peak = closes[0];
+  let maxDrawdown = 0;
+  closes.forEach((value) => {
+    peak = Math.max(peak, value);
+    maxDrawdown = Math.min(maxDrawdown, (value / peak) - 1);
+  });
+  return { periodReturn, volatility, maxDrawdown: maxDrawdown * 100 };
 }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { message: string | null }> {

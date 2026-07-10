@@ -30,6 +30,10 @@ def test_stock_search_and_detail() -> None:
     assert payload["history"]
     assert payload["predictions"]
 
+    comparison_detail = client.get("/api/stocks/300750", params={"include_predictions": "false"})
+    assert comparison_detail.status_code == 200
+    assert comparison_detail.json()["predictions"] == []
+
 
 def test_rankings_and_predictions_shape() -> None:
     rankings = client.get("/api/rankings", params={"type": "gainers"})

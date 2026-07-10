@@ -100,6 +100,19 @@ nav button:hover {
   background: #36504b;
 }
 
+.navCount {
+  min-width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  border-radius: 999px;
+  color: #24312f;
+  background: #f7c45f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .sidebarFoot {
   margin-top: auto;
   display: flex;
@@ -164,7 +177,8 @@ nav button:hover {
 }
 
 .iconButton,
-.starButton {
+.starButton,
+.compareButton {
   display: inline-grid;
   place-items: center;
   width: 40px;
@@ -180,10 +194,21 @@ nav button:hover {
   height: 30px;
 }
 
+.compareButton {
+  width: 30px;
+  height: 30px;
+}
+
 .starButton.selected {
   color: #8a5a00;
   background: #fff2d7;
   border-color: #f1c465;
+}
+
+.compareButton.selected {
+  color: #143d37;
+  background: #e5f2ef;
+  border-color: #78aaa1;
 }
 
 .spin {
@@ -219,12 +244,18 @@ nav button:hover {
 
 .searchAction {
   min-width: 86px;
+  flex: 0 0 auto;
   height: 40px;
   padding: 0 12px;
   border: 1px solid #78aaa1;
   border-radius: 8px;
   color: #143d37;
   background: #e5f2ef;
+  white-space: nowrap;
+}
+
+.toolbar .iconButton {
+  flex: 0 0 auto;
 }
 
 .searchAction:disabled {
@@ -383,6 +414,140 @@ nav button:hover {
 
 .full {
   grid-column: 1 / -1;
+}
+
+.compareSelector .panelHead > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.compareSelector select {
+  min-width: 230px;
+  height: 36px;
+  padding: 0 34px 0 10px;
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  color: #344054;
+  background: #ffffff;
+}
+
+.compareChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compareChips button {
+  min-width: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 9px 8px 11px;
+  border: 1px solid #a6beb7;
+  border-radius: 8px;
+  color: #1d2939;
+  background: #edf7f4;
+  text-align: left;
+}
+
+.compareChips span,
+.compareChips strong,
+.compareChips small {
+  display: block;
+}
+
+.compareChips small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.compareMessage {
+  margin: 10px 0 0;
+  color: #8a5a00;
+  font-size: 13px;
+}
+
+.compareCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.compareCard,
+.compareProfiles article {
+  border: 1px solid #dfe5df;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.compareCard {
+  padding: 14px;
+}
+
+.compareCard > span {
+  display: block;
+  margin-top: 3px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.compareCard > strong {
+  display: block;
+  margin: 12px 0 8px;
+  font-size: 24px;
+}
+
+.compareCard > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compareCard em {
+  font-size: 12px;
+  font-style: normal;
+}
+
+.compareTable table {
+  min-width: 760px;
+}
+
+.compareTable tbody th {
+  width: 150px;
+  color: #475467;
+  background: #f9faf9;
+}
+
+.compareProfiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.compareProfiles article {
+  padding: 14px;
+}
+
+.compareProfiles article > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compareProfiles span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.compareProfiles p {
+  margin: 10px 0 0;
+  color: #475467;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .panelHead {
@@ -752,6 +917,13 @@ td strong {
   color: #667085;
 }
 
+.chartPlaceholder {
+  display: grid;
+  place-items: center;
+  color: #667085;
+  background: #f9faf9;
+}
+
 @media (max-width: 1180px) {
   .indexGrid {
     grid-template-columns: repeat(3, 1fr);
@@ -764,7 +936,8 @@ td strong {
   }
 
   .sectorCards,
-  .predictionCards {
+  .predictionCards,
+  .compareCards {
     grid-template-columns: repeat(2, 1fr);
   }
 
@@ -811,8 +984,19 @@ td strong {
 
   .indexGrid,
   .predictionCards,
-  .sectorCards {
+  .sectorCards,
+  .compareCards,
+  .compareProfiles {
     grid-template-columns: 1fr;
+  }
+
+  .compareSelector .panelHead {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .compareSelector select {
+    width: 100%;
   }
 
   .breadth,
