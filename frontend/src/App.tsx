@@ -115,11 +115,9 @@ export default function App() {
     } else if (route.section === "predictions") {
       setPredictions(await api.predictions(predictionParams(theme), signal));
     } else if (route.section === "stock-detail" && route.code) {
-      const liveDetail = await api.stockDetail(route.code, route.market, false, 120, signal);
-      const predictionData = await api.predictions(new URLSearchParams({ code: route.code, market: route.market || "", horizons: "1,3,5" }), signal).catch(() => null);
-      const resolved = { ...liveDetail, predictions: predictionData?.items ?? liveDetail.predictions ?? [] };
-      setDetail(resolved);
-      setSamplePool((current) => saveSamplePool([resolved, ...current]));
+      const liveDetail = await api.stockDetail(route.code, route.market, true, 120, signal);
+      setDetail(liveDetail);
+      setSamplePool((current) => saveSamplePool([liveDetail, ...current]));
     }
   }, [contentFilters, rankingType, route.code, route.market, route.section, selectedSector, theme]);
 
