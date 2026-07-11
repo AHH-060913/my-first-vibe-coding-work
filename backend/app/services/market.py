@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -83,17 +84,20 @@ class MarketService:
         )
 
     def overview(self) -> dict[str, Any]:
-        stocks, stock_source, stock_updated = self.stocks()
-        indices, index_source, _ = self.indices()
-        sectors, sector_source, _ = self.sectors()
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            stocks_future = executor.submit(self.stocks)
+            indices_future = executor.submit(self.indices)
+            sectors_future = executor.submit(self.sectors)
+            index_history_future = executor.submit(self.index_history, "000001")
+            stocks, stock_source, stock_updated = stocks_future.result()
+            indices, index_source, _ = indices_future.result()
+            sectors, sector_source, _ = sectors_future.result()
+            index_history, _, _ = index_history_future.result()
         up_count = sum(1 for item in stocks if item.get("change_pct", 0) > 0)
         down_count = sum(1 for item in stocks if item.get("change_pct", 0) < 0)
         flat_count = max(0, len(stocks) - up_count - down_count)
         total_amount = sum(float(item.get("amount") or 0) for item in stocks)
         hot_sectors = sorted(sectors, key=lambda item: (item.get("change_pct") or 0, item.get("amount") or 0), reverse=True)[:8]
-        index_history: list[dict[str, Any]] = []
-        if indices:
-            index_history, _, _ = self.index_history(indices[0]["code"])
         return {
             "updated_at": stock_updated,
             "source": f"{stock_source}; {index_source}; {sector_source}",
@@ -172,14 +176,19 @@ class MarketService:
 
     def _resolve_stock_uncached(self, code: str, market: str = "") -> dict[str, Any]:
         quote, quote_source = self.provider.quote(code, market)
-        history, history_source, _ = self.stock_history(code)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            history_future = executor.submit(self.stock_history, code)
+            profile_future = executor.submit(self._profile, code, quote.get("name", ""), market)
+            news_future = executor.submit(self.news)
+            announcements_future = executor.submit(self.announcements)
+            history, history_source, _ = history_future.result()
+            profile, profile_source, _ = profile_future.result()
+            news, _, _ = news_future.result()
+            announcements, _, _ = announcements_future.result()
         if quote.get("price") and history_source.startswith("seed") and not any(point.get("date") for point in history[-3:]):
             history = self.provider.synthetic_history(code, quote.get("price"), market)
         elif quote.get("price") and history_source.startswith("seed"):
             history = self.provider.synthetic_history(code, quote.get("price"), market)
-        profile, profile_source, _ = self._profile(code, quote.get("name", ""), market)
-        news, _, _ = self.news()
-        announcements, _, _ = self.announcements()
         related_news = [
             item
             for item in news
@@ -213,10 +222,15 @@ class MarketService:
             resolved = self.resolve_stock(normalized, normalized_market)
             return resolved
         quote["market"] = quote.get("market") or normalized_market
-        history, history_source, _ = self.stock_history(normalized)
-        profile, profile_source, _ = self._profile(normalized, quote.get("name", ""), normalized_market)
-        news, _, _ = self.news()
-        announcements, _, _ = self.announcements()
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            history_future = executor.submit(self.stock_history, normalized)
+            profile_future = executor.submit(self._profile, normalized, quote.get("name", ""), normalized_market)
+            news_future = executor.submit(self.news)
+            announcements_future = executor.submit(self.announcements)
+            history, history_source, _ = history_future.result()
+            profile, profile_source, _ = profile_future.result()
+            news, _, _ = news_future.result()
+            announcements, _, _ = announcements_future.result()
         related_news = [
             item
             for item in news
@@ -251,16 +265,36 @@ class MarketService:
         return payload
 
     def compare(self, symbols: list[dict[str, str]], benchmark: str = "000300", window: int = 60) -> dict[str, Any]:
-        details: list[dict[str, Any]] = []
+        stocks, stock_source, stock_updated = self.stocks()
+        stock_by_code = {item.get("code", ""): item for item in stocks}
+
+        def comparison_detail(symbol: dict[str, str]) -> dict[str, Any]:
+            code, market = normalize_symbol(symbol.get("code", ""), symbol.get("market", ""))
+            quote = dict(stock_by_code.get(code) or {}) if market != "HK" else {}
+            quote_source = stock_source
+            if not quote:
+                quote, quote_source = self.provider.quote(code, market)
+            quote["market"] = quote.get("market") or market
+            history, history_source, history_updated = self.stock_history(code)
+            if quote.get("price") and history_source.startswith("seed"):
+                history = self.provider.synthetic_history(code, quote.get("price"), market)
+            return {
+                "quote": quote,
+                "history": history,
+                "source": f"{quote_source}; {history_source}",
+                "updated_at": quote.get("updated_at") or history_updated or stock_updated,
+            }
+
         sources: list[str] = []
         updated_values: list[str] = []
-        for symbol in symbols:
-            code, market = normalize_symbol(symbol.get("code", ""), symbol.get("market", ""))
-            detail = self.stock_detail(code, market)
-            details.append(detail)
+        with ThreadPoolExecutor(max_workers=min(6, len(symbols) + 1)) as executor:
+            detail_futures = [executor.submit(comparison_detail, symbol) for symbol in symbols]
+            benchmark_future = executor.submit(self.index_history, benchmark)
+            details = [future.result() for future in detail_futures]
+            benchmark_history, benchmark_source, benchmark_updated = benchmark_future.result()
+        for detail in details:
             sources.append(str(detail.get("source", "")))
             updated_values.append(str(detail.get("updated_at", "")))
-        benchmark_history, benchmark_source, benchmark_updated = self.index_history(benchmark)
         result = comparison_payload(details, benchmark_history, normalize_code(benchmark), window)
         sources.append(benchmark_source)
         updated_values.append(benchmark_updated)
@@ -268,7 +302,10 @@ class MarketService:
             {
                 "source": "; ".join(source for source in sources if source),
                 "updated_at": max((value for value in updated_values if value), default=now_iso()),
-                "stale": any(source.startswith("seed") or "stale-cache" in source for source in sources),
+                "stale": any(
+                    "seed" in source or "stale-cache" in source or "fallback" in source
+                    for source in sources
+                ),
             }
         )
         return result

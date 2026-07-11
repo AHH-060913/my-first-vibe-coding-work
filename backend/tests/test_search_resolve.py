@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.services.market import MarketService
-from app.services.providers import normalize_symbol
+from app.services.providers import FreeMarketProvider, normalize_symbol
 
 
 class FakeClient:
@@ -69,6 +69,27 @@ def test_search_stocks_uses_provider() -> None:
     payload = service.search_stocks("测试")
     assert payload["items"][0]["code"] == "123456"
     assert payload["items"][0]["source"] == "fake:search"
+
+
+def test_search_stops_after_first_remote_provider(monkeypatch) -> None:
+    provider = FreeMarketProvider(timeout=0.1)
+    calls: list[str] = []
+
+    def tencent(query: str, limit: int):
+        calls.append("tencent")
+        return [{"code": "01810", "name": "小米集团-W", "market": "HK", "source": "tencent:test"}]
+
+    def sina(query: str, limit: int):
+        calls.append("sina")
+        return []
+
+    monkeypatch.setattr(provider, "_search_tencent", tencent)
+    monkeypatch.setattr(provider, "_search_sina", sina)
+
+    payload = provider.search_stocks("小米集团")
+
+    assert calls == ["tencent"]
+    assert payload[0]["code"] == "01810"
 
 
 def test_normalize_symbol_keeps_hk_codes() -> None:

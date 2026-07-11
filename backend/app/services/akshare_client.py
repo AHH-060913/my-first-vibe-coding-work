@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import date
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import pandas as pd
 
 from ..config import get_settings
 from ..seed import SEED_ANNOUNCEMENTS, SEED_INDICES, SEED_NEWS, SEED_SECTORS, SEED_STOCKS, THEMES, seed_history, seed_index_history
 from .normalizers import normalize_history, normalize_index_spot, normalize_sector, normalize_stock_spot
+
+
+T = TypeVar("T")
+_LIVE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="akshare-live")
 
 
 class AkshareClient:
@@ -23,11 +28,19 @@ class AkshareClient:
 
         return ak
 
+    def _live_call(self, loader: Callable[[], T]) -> T:
+        future = _LIVE_EXECUTOR.submit(loader)
+        try:
+            return future.result(timeout=max(0.5, self.settings.live_fetch_timeout_seconds))
+        except FutureTimeoutError as exc:
+            future.cancel()
+            raise TimeoutError("live data source timed out") from exc
+
     def stock_spot(self) -> tuple[list[dict[str, Any]], str]:
         if self.live_enabled:
             try:
-                ak = self._load_akshare()
-                rows = normalize_stock_spot(ak.stock_zh_a_spot_em())
+                raw = self._live_call(lambda: self._load_akshare().stock_zh_a_spot_em())
+                rows = normalize_stock_spot(raw)
                 if rows:
                     return self._enrich_theme(rows), "akshare:stock_zh_a_spot_em"
             except Exception:
@@ -38,8 +51,10 @@ class AkshareClient:
     def index_spot(self) -> tuple[list[dict[str, Any]], str]:
         if self.live_enabled:
             try:
-                ak = self._load_akshare()
-                rows = normalize_index_spot(ak.stock_zh_index_spot_em(symbol="沪深重要指数"))
+                raw = self._live_call(
+                    lambda: self._load_akshare().stock_zh_index_spot_em(symbol="沪深重要指数")
+                )
+                rows = normalize_index_spot(raw)
                 if rows:
                     return rows, "akshare:stock_zh_index_spot_em"
             except Exception:
@@ -50,8 +65,12 @@ class AkshareClient:
     def stock_history(self, code: str) -> tuple[list[dict[str, Any]], str]:
         if self.live_enabled:
             try:
-                ak = self._load_akshare()
-                rows = normalize_history(ak.stock_zh_a_hist(symbol=code, period="daily", start_date="20240101", adjust="qfq"))
+                raw = self._live_call(
+                    lambda: self._load_akshare().stock_zh_a_hist(
+                        symbol=code, period="daily", start_date="20240101", adjust="qfq"
+                    )
+                )
+                rows = normalize_history(raw)
                 if rows:
                     return rows[-180:], "akshare:stock_zh_a_hist"
             except Exception:
@@ -62,8 +81,11 @@ class AkshareClient:
     def index_history(self, code: str) -> tuple[list[dict[str, Any]], str]:
         if self.live_enabled:
             try:
-                ak = self._load_akshare()
-                raw = ak.stock_zh_index_daily_em(symbol=code, start_date="20240101")
+                raw = self._live_call(
+                    lambda: self._load_akshare().stock_zh_index_daily_em(
+                        symbol=code, start_date="20240101"
+                    )
+                )
                 df = pd.DataFrame(raw)
                 rows = []
                 for item in df.to_dict(orient="records"):
@@ -84,9 +106,13 @@ class AkshareClient:
     def sectors(self) -> tuple[list[dict[str, Any]], str]:
         if self.live_enabled:
             try:
-                ak = self._load_akshare()
-                industry = normalize_sector(ak.stock_board_industry_name_em(), self._theme_by_board())
-                concept = normalize_sector(ak.stock_board_concept_name_em(), self._theme_by_board())
+                def load_boards():
+                    ak = self._load_akshare()
+                    return ak.stock_board_industry_name_em(), ak.stock_board_concept_name_em()
+
+                industry_raw, concept_raw = self._live_call(load_boards)
+                industry = normalize_sector(industry_raw, self._theme_by_board())
+                concept = normalize_sector(concept_raw, self._theme_by_board())
                 rows = [row for row in industry + concept if row["theme"]]
                 if rows:
                     return rows, "akshare:stock_board_industry_name_em+stock_board_concept_name_em"
@@ -98,9 +124,8 @@ class AkshareClient:
     def news(self) -> tuple[list[dict[str, Any]], str]:
         if self.live_enabled:
             try:
-                ak = self._load_akshare()
                 rows: list[dict[str, Any]] = []
-                raw = ak.stock_news_main_cx()
+                raw = self._live_call(lambda: self._load_akshare().stock_news_main_cx())
                 for item in raw.head(60).to_dict(orient="records"):
                     title = str(item.get("标题") or item.get("title") or "")
                     rows.append(
@@ -122,9 +147,10 @@ class AkshareClient:
     def announcements(self) -> tuple[list[dict[str, Any]], str]:
         if self.live_enabled:
             try:
-                ak = self._load_akshare()
                 today = date.today().strftime("%Y%m%d")
-                raw = ak.stock_notice_report(symbol="全部", date=today)
+                raw = self._live_call(
+                    lambda: self._load_akshare().stock_notice_report(symbol="全部", date=today)
+                )
                 rows = []
                 for item in raw.head(80).to_dict(orient="records"):
                     title = str(item.get("公告标题") or item.get("标题") or "")

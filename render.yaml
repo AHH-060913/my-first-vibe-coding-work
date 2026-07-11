@@ -9,6 +9,8 @@ services:
     envVars:
       - key: A_DASHBOARD_DATA_MODE
         value: auto
+      - key: A_DASHBOARD_LIVE_TIMEOUT
+        value: "4"
       - key: A_DASHBOARD_CORS
         value: https://ahh-060913.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5175,http://127.0.0.1:5175
       - key: PYTHON_VERSION

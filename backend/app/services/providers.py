@@ -86,7 +86,7 @@ def seed_stock_by_code(code: str) -> dict[str, Any] | None:
 
 
 class FreeMarketProvider:
-    def __init__(self, timeout: float = 6.0) -> None:
+    def __init__(self, timeout: float = 2.5) -> None:
         self.timeout = timeout
 
     def search_stocks(self, query: str, limit: int = 12) -> list[dict[str, Any]]:
@@ -106,11 +106,15 @@ class FreeMarketProvider:
                         "source": "local:code",
                     }
                 )
-        for loader in (self._search_tencent, self._search_sina, self._search_seed):
+        for loader in (self._search_tencent, self._search_sina):
             try:
-                results.extend(loader(q, limit))
+                remote_results = loader(q, limit)
+                results.extend(remote_results)
+                if remote_results:
+                    break
             except Exception:
                 continue
+        results.extend(self._search_seed(q, limit))
         unique: dict[str, dict[str, Any]] = {}
         for item in results:
             market = (item.get("market") or "").upper()
@@ -125,7 +129,11 @@ class FreeMarketProvider:
     def quote(self, code: str, market: str = "") -> tuple[dict[str, Any], str]:
         normalized, normalized_market = normalize_symbol(code, market)
         errors: list[str] = []
-        loaders = (self._quote_tencent_hk, self._quote_sina_hk) if normalized_market == "HK" else (self._quote_sina, self._quote_tencent)
+        loaders = (
+            (self._quote_tencent_hk, self._quote_sina_hk)
+            if normalized_market == "HK"
+            else (self._quote_tencent, self._quote_sina)
+        )
         for loader in loaders:
             try:
                 quote_data, source = loader(normalized)

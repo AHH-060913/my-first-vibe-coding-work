@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_name: str = "A股个人投研看板"
     data_mode: str = Field(default="seed", validation_alias="A_DASHBOARD_DATA_MODE")
     cache_ttl_seconds: int = Field(default=90, validation_alias="A_DASHBOARD_CACHE_TTL")
+    live_fetch_timeout_seconds: float = Field(default=4.0, validation_alias="A_DASHBOARD_LIVE_TIMEOUT")
     db_path: Path = Field(default=Path("data/dashboard.sqlite3"), validation_alias="A_DASHBOARD_DB")
     cors_origins: str = Field(
         default=(

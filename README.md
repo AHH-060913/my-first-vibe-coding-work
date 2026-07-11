@@ -67,6 +67,7 @@ $env:A_DASHBOARD_DATA_MODE="seed"
 
 ```powershell
 $env:A_DASHBOARD_DATA_MODE="auto"
+$env:A_DASHBOARD_LIVE_TIMEOUT="4"
 ```
 
 仅使用 AKShare，失败则报错：
@@ -85,10 +86,9 @@ npm run build
 ## GitHub Pages + Render
 
 1. 在 Render 创建 Web Service，连接这个 GitHub 仓库；仓库内的 `render.yaml` 已配置 `backend` 作为后端服务。
-2. Render 后端启动后，打开 `https://你的-render-服务.onrender.com/api/health` 确认在线。
-3. 在 GitHub 仓库 `Settings -> Secrets and variables -> Actions -> Variables` 新增变量：
-   - `VITE_API_BASE_URL=https://你的-render-服务.onrender.com/api`
-4. 推送到 `main` 后，`.github/workflows/pages.yml` 会自动构建 Pages；如果没有设置 `VITE_API_BASE_URL`，会自动回到静态演示模式。
+2. Render 后端启动后，打开 `https://my-first-vibe-coding-work-api.onrender.com/api/health` 确认在线。
+3. `.github/workflows/pages.yml` 默认连接上述 Render 地址；如果服务被重命名，可在 GitHub Actions Variables 中用 `VITE_API_BASE_URL` 覆盖。
+4. 推送到 `main` 后，GitHub Actions 会构建公开前端，页面先显示明确标记的演示数据，再无闪烁更新云端结果。
 
 ## API
 

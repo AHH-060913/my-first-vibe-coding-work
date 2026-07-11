@@ -68,12 +68,14 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   const request = (async () => {
     const controller = new AbortController();
+    const relayAbort = () => controller.abort();
+    init?.signal?.addEventListener("abort", relayAbort, { once: true });
     const timeout = window.setTimeout(() => controller.abort(), 55_000);
     try {
       const response = await fetch(key, {
         headers: { "Content-Type": "application/json" },
-        signal: init?.signal || controller.signal,
-        ...init
+        ...init,
+        signal: controller.signal
       });
       if (!response.ok) {
         const text = await response.text();
@@ -89,6 +91,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
       throw error;
     } finally {
       window.clearTimeout(timeout);
+      init?.signal?.removeEventListener("abort", relayAbort);
       pendingRequests.delete(key);
     }
   })();
