@@ -1,5 +1,8 @@
 import type {
   Announcement,
+  CompareResponse,
+  CompareSymbol,
+  IndexHistoryResponse,
   ListResponse,
   NewsItem,
   Overview,
@@ -60,7 +63,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
       return stored;
     }
     const pending = pendingRequests.get(key);
-    if (pending) return pending as Promise<T>;
+    if (pending && !init?.signal) return pending as Promise<T>;
   }
 
   const request = (async () => {
@@ -90,7 +93,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     }
   })();
 
-  if (cacheable) pendingRequests.set(key, request);
+  if (cacheable && !init?.signal) pendingRequests.set(key, request);
   return request;
 }
 
@@ -103,18 +106,37 @@ function withMarket(path: string, market?: string, includePredictions = true) {
 }
 
 export const api = {
-  overview: () => (STATIC_DEMO ? staticApi.overview() : fetchJson<Overview>("/market/overview")),
-  stocks: (params: URLSearchParams) => (STATIC_DEMO ? staticApi.stocks(params) : fetchJson<ListResponse<Stock>>(`/stocks?${params.toString()}`)),
+  warm: () => (STATIC_DEMO ? Promise.resolve({ status: "ok", data_mode: "seed" }) : fetchJson<{ status: string; data_mode: string }>("/health")),
+  overview: (signal?: AbortSignal) => (STATIC_DEMO ? staticApi.overview() : fetchJson<Overview>("/market/overview", { signal })),
+  stocks: (params: URLSearchParams, signal?: AbortSignal) => (STATIC_DEMO ? staticApi.stocks(params) : fetchJson<ListResponse<Stock>>(`/stocks?${params.toString()}`, { signal })),
   searchStocks: (q: string) => (STATIC_DEMO ? staticApi.searchStocks(q) : fetchJson<ListResponse<StockSearchResult>>(`/search/stocks?q=${encodeURIComponent(q)}`)),
-  stockDetail: (code: string, market?: string, includePredictions = true) =>
-    STATIC_DEMO ? staticApi.stockDetail(code, market) : fetchJson<StockDetail>(withMarket(`/stocks/${code}`, market, includePredictions)),
-  resolveStock: (code: string, market?: string, includePredictions = true) =>
-    STATIC_DEMO ? staticApi.resolveStock(code, market) : fetchJson<StockDetail>(withMarket(`/stocks/${code}/resolve`, market, includePredictions)),
-  sectors: (theme?: string) => (STATIC_DEMO ? staticApi.sectors(theme) : fetchJson<ListResponse<Sector>>(`/sectors${theme ? `?theme=${theme}` : ""}`)),
-  rankings: (type: string) => (STATIC_DEMO ? staticApi.rankings(type) : fetchJson<ListResponse<Stock | Sector | Prediction>>(`/rankings?type=${type}`)),
-  news: (params: URLSearchParams) => (STATIC_DEMO ? staticApi.news(params) : fetchJson<ListResponse<NewsItem>>(`/news?${params.toString()}`)),
-  announcements: (params: URLSearchParams) => (STATIC_DEMO ? staticApi.announcements(params) : fetchJson<ListResponse<Announcement>>(`/announcements?${params.toString()}`)),
-  predictions: (params: URLSearchParams) => (STATIC_DEMO ? staticApi.predictions(params) : fetchJson<ListResponse<Prediction>>(`/predictions?${params.toString()}`)),
+  stockDetail: (code: string, market?: string, includePredictions = true, historyDays = 120, signal?: AbortSignal) => {
+    const path = withMarket(`/stocks/${code}`, market, includePredictions);
+    return STATIC_DEMO
+      ? staticApi.stockDetail(code, market, historyDays)
+      : fetchJson<StockDetail>(`${path}${path.includes("?") ? "&" : "?"}history_days=${historyDays}`, { signal });
+  },
+  resolveStock: (code: string, market?: string, includePredictions = true, historyDays = 120) => {
+    const path = withMarket(`/stocks/${code}/resolve`, market, includePredictions);
+    return STATIC_DEMO
+      ? staticApi.resolveStock(code, market, historyDays)
+      : fetchJson<StockDetail>(`${path}${path.includes("?") ? "&" : "?"}history_days=${historyDays}`);
+  },
+  indexHistory: (code: string, days = 60, signal?: AbortSignal) =>
+    STATIC_DEMO ? staticApi.indexHistory(code, days) : fetchJson<IndexHistoryResponse>(`/market/indices/${code}/history?days=${days}`, { signal }),
+  compare: (symbols: CompareSymbol[], window = 60, benchmark = "000300", signal?: AbortSignal) =>
+    STATIC_DEMO
+      ? staticApi.compare(symbols, window, benchmark)
+      : fetchJson<CompareResponse>("/analysis/compare", {
+          method: "POST",
+          body: JSON.stringify({ symbols, window, benchmark }),
+          signal
+        }),
+  sectors: (theme?: string, signal?: AbortSignal) => (STATIC_DEMO ? staticApi.sectors(theme) : fetchJson<ListResponse<Sector>>(`/sectors${theme ? `?theme=${theme}` : ""}`, { signal })),
+  rankings: (type: string, signal?: AbortSignal) => (STATIC_DEMO ? staticApi.rankings(type) : fetchJson<ListResponse<Stock | Sector | Prediction>>(`/rankings?type=${type}`, { signal })),
+  news: (params: URLSearchParams, signal?: AbortSignal) => (STATIC_DEMO ? staticApi.news(params) : fetchJson<ListResponse<NewsItem>>(`/news?${params.toString()}`, { signal })),
+  announcements: (params: URLSearchParams, signal?: AbortSignal) => (STATIC_DEMO ? staticApi.announcements(params) : fetchJson<ListResponse<Announcement>>(`/announcements?${params.toString()}`, { signal })),
+  predictions: (params: URLSearchParams, signal?: AbortSignal) => (STATIC_DEMO ? staticApi.predictions(params) : fetchJson<ListResponse<Prediction>>(`/predictions?${params.toString()}`, { signal })),
   watchlist: () => (STATIC_DEMO ? staticApi.watchlist() : fetchJson<ListResponse<Stock> & { codes: string[] }>("/watchlist")),
   addWatch: async (code: string) => {
     const result = STATIC_DEMO ? await staticApi.addWatch(code) : await fetchJson<{ ok: boolean; code: string }>("/watchlist", { method: "POST", body: JSON.stringify({ code }) });
@@ -141,5 +163,6 @@ export const api = {
     } catch {
       // Ignore storage access failures.
     }
-  }
+  },
+  demo: staticApi
 };

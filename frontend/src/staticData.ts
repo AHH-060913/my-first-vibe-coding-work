@@ -1,4 +1,5 @@
-import type { Announcement, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, StockProfile, StockSearchResult, ThemeMeta } from "./types";
+import type { Announcement, CompareSymbol, IndexHistoryResponse, ListResponse, NewsItem, Overview, Prediction, Sector, Stock, StockDetail, StockProfile, StockSearchResult, ThemeMeta } from "./types";
+import { buildEvents, calculateAnalytics, calculateComparison, calculateDistribution, calculateTemperature } from "./lib/marketMath";
 
 const updated_at = "2026-06-25T03:44:51.000Z";
 const source = "static-demo:seed";
@@ -81,10 +82,28 @@ const indices = [
 ];
 
 function history(code = "300750") {
-  const stock = stocks.find((item) => item.code === code) ?? stocks[0];
-  return Array.from({ length: 72 }, (_, index) => {
-    const close = stock.price * (0.84 + index / 420 + Math.sin(index / 5) * 0.025);
-    return { date: `2026-${String(3 + Math.floor(index / 24)).padStart(2, "0")}-${String((index % 24) + 1).padStart(2, "0")}`, close: Number(close.toFixed(2)), amount: stock.amount * (0.65 + Math.abs(Math.sin(index / 7)) * 0.5) };
+  const stock = code === "01810" ? xiaomiStock : stocks.find((item) => item.code === code) ?? stocks[0];
+  const indexQuote = indices.find((item) => item.code === code);
+  const targetPrice = indexQuote?.price ?? stock.price;
+  const targetAmount = indexQuote?.amount ?? stock.amount;
+  return Array.from({ length: 140 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 0, 2 + index));
+    const close = targetPrice * (0.76 + index / 610 + Math.sin(index / 5) * 0.025 + Math.sin(index / 17) * 0.012);
+    const open = close * (1 - Math.sin(index / 4) * 0.009);
+    const high = Math.max(open, close) * (1.008 + Math.abs(Math.sin(index / 9)) * 0.008);
+    const low = Math.min(open, close) * (0.992 - Math.abs(Math.cos(index / 11)) * 0.006);
+    const amount = targetAmount * (0.65 + Math.abs(Math.sin(index / 7)) * 0.5);
+    return {
+      date: date.toISOString().slice(0, 10),
+      open: Number(open.toFixed(2)),
+      close: Number(close.toFixed(2)),
+      high: Number(high.toFixed(2)),
+      low: Number(low.toFixed(2)),
+      volume: Math.round(amount / close),
+      amount: Number(amount.toFixed(2)),
+      change_pct: Number(((close / open - 1) * 100).toFixed(2)),
+      turnover_rate: stock.turnover_rate
+    };
   });
 }
 
@@ -148,24 +167,34 @@ function profile(stock: Stock): StockProfile {
 function filterStocks(params: URLSearchParams) {
   const q = params.get("q")?.trim().toLowerCase();
   const theme = params.get("theme");
+  const sector = params.get("sector");
   const sort = params.get("sort") || "change_pct";
   const order = params.get("order") || "desc";
   const rows = stocks
     .filter((item) => !theme || item.theme === theme)
+    .filter((item) => !sector || item.sector === sector)
     .filter((item) => !q || item.code.includes(q) || item.name.toLowerCase().includes(q))
     .sort((a, b) => Number(a[sort as keyof Stock] || 0) - Number(b[sort as keyof Stock] || 0));
   if (order !== "asc") rows.reverse();
   return rows;
 }
 
-function detailForCode(code: string, market?: string): StockDetail {
-  const quote = market === "HK" || code === "01810" ? xiaomiStock : stocks.find((item) => item.code === code) ?? stocks[0];
+function detailForCode(code: string, market?: string, historyDays = 120): StockDetail {
+  const found = stocks.find((item) => item.code === code);
+  const quote = market === "HK" || code === "01810"
+    ? xiaomiStock
+    : found ?? { ...stocks[0], code, name: `股票 ${code}`, market: market || (code.startsWith("6") ? "SH" : "SZ"), stale: true, source };
+  const fullHistory = history(quote.code);
+  const relatedNews = news.filter((item) => item.theme === quote.theme || item.theme === "market");
+  const relatedAnnouncements = announcements.filter((item) => item.code === quote.code);
   return {
     quote,
-    history: history(quote.code),
+    history: fullHistory.slice(-historyDays),
     profile: profile(quote),
-    news: news.filter((item) => item.theme === quote.theme || item.theme === "market"),
-    announcements: announcements.filter((item) => item.code === quote.code),
+    news: relatedNews,
+    announcements: relatedAnnouncements,
+    events: buildEvents(relatedNews, relatedAnnouncements),
+    analytics: calculateAnalytics(fullHistory),
     predictions: [1, 3, 5].map((horizon) => predict(quote, horizon)),
     source,
     updated_at
@@ -182,6 +211,8 @@ export const staticApi = {
       breadth: { up: stocks.filter((item) => item.change_pct > 0).length, down: stocks.filter((item) => item.change_pct < 0).length, flat: 0, total: stocks.length },
       total_amount: stocks.reduce((sum, item) => sum + item.amount, 0),
       hot_sectors: sectors,
+      market_temperature: calculateTemperature(stocks, sectors),
+      change_distribution: calculateDistribution(stocks),
       themes
     };
   },
@@ -199,11 +230,18 @@ export const staticApi = {
     }
     return { items, source, updated_at };
   },
-  async stockDetail(code: string, market?: string): Promise<StockDetail> {
-    return detailForCode(code, market);
+  async stockDetail(code: string, market?: string, historyDays = 120): Promise<StockDetail> {
+    return detailForCode(code, market, historyDays);
   },
-  async resolveStock(code: string, market?: string): Promise<StockDetail> {
-    return detailForCode(code, market);
+  async resolveStock(code: string, market?: string, historyDays = 120): Promise<StockDetail> {
+    return detailForCode(code, market, historyDays);
+  },
+  async indexHistory(code: string, days = 60): Promise<IndexHistoryResponse> {
+    return { code, items: history(code).slice(-days), source, updated_at, stale: true };
+  },
+  async compare(symbols: CompareSymbol[], window = 60, benchmark = "000300") {
+    const details = symbols.map((item) => detailForCode(item.code, item.market, window));
+    return calculateComparison(details, window, benchmark);
   },
   async sectors(theme?: string): Promise<ListResponse<Sector>> {
     const items = sectors.filter((item) => !theme || item.theme === theme);
@@ -220,18 +258,36 @@ export const staticApi = {
   async news(params: URLSearchParams): Promise<ListResponse<NewsItem>> {
     const theme = params.get("theme");
     const q = params.get("q")?.trim();
-    const items = news.filter((item) => (!theme || item.theme === theme || item.theme === "market") && (!q || item.title.includes(q)));
+    const dateFrom = params.get("date_from");
+    const dateTo = params.get("date_to");
+    const items = news.filter((item) =>
+      (!theme || item.theme === theme || item.theme === "market")
+      && (!q || item.title.includes(q))
+      && (!dateFrom || item.published_at.slice(0, 10) >= dateFrom)
+      && (!dateTo || item.published_at.slice(0, 10) <= dateTo)
+    );
     return { items, source, updated_at };
   },
   async announcements(params: URLSearchParams): Promise<ListResponse<Announcement>> {
     const q = params.get("q")?.trim();
-    const items = announcements.filter((item) => !q || item.title.includes(q) || item.name.includes(q));
+    const type = params.get("type");
+    const dateFrom = params.get("date_from");
+    const dateTo = params.get("date_to");
+    const items = announcements.filter((item) =>
+      (!q || item.title.includes(q) || item.name.includes(q) || item.code.includes(q))
+      && (!type || item.type.includes(type))
+      && (!dateFrom || item.published_at.slice(0, 10) >= dateFrom)
+      && (!dateTo || item.published_at.slice(0, 10) <= dateTo)
+    );
     return { items, source, updated_at };
   },
   async predictions(params: URLSearchParams): Promise<ListResponse<Prediction>> {
     const theme = params.get("theme");
-    const horizon = Number(params.get("horizon") || 3);
-    const items = stocks.filter((item) => !theme || item.theme === theme).map((item) => predict(item, horizon)).sort((a, b) => b.excess_probability - a.excess_probability);
+    const requestedHorizons = params.get("horizons")?.split(",").map(Number).filter((item) => [1, 3, 5].includes(item));
+    const horizons = requestedHorizons?.length ? requestedHorizons : [Number(params.get("horizon") || 3)];
+    const code = params.get("code");
+    const candidates = stocks.filter((item) => (!theme || item.theme === theme) && (!code || item.code === code));
+    const items = horizons.flatMap((horizon) => candidates.map((item) => predict(item, horizon))).sort((a, b) => a.horizon - b.horizon || b.excess_probability - a.excess_probability);
     return { items, source, updated_at };
   },
   async watchlist(): Promise<ListResponse<Stock> & { codes: string[] }> {

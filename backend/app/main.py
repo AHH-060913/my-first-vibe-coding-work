@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .database import add_watchlist, init_db, list_watchlist, remove_watchlist
@@ -39,6 +39,17 @@ class WatchlistItem(BaseModel):
     code: str
 
 
+class CompareSymbol(BaseModel):
+    code: str
+    market: str = ""
+
+
+class CompareRequest(BaseModel):
+    symbols: list[CompareSymbol] = Field(min_length=2, max_length=5)
+    benchmark: str = "000300"
+    window: int = Field(default=60, ge=20, le=120)
+
+
 def market_service() -> MarketService:
     return _market_service
 
@@ -61,12 +72,13 @@ def market_overview() -> dict[str, Any]:
 def stocks(
     q: str | None = None,
     theme: str | None = None,
+    sector: str | None = None,
     sort: str = "change_pct",
     order: str = "desc",
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
 ) -> dict[str, Any]:
-    return market_service().get_stocks(q=q, theme=theme, sort=sort, order=order, page=page, page_size=page_size)
+    return market_service().get_stocks(q=q, theme=theme, sector=sector, sort=sort, order=order, page=page, page_size=page_size)
 
 
 @app.get("/api/search/stocks")
@@ -74,10 +86,20 @@ def search_stocks(q: str = Query("", min_length=1)) -> dict[str, Any]:
     return market_service().search_stocks(q)
 
 
+@app.get("/api/market/indices/{code}/history")
+def index_history(code: str, days: int = Query(60, ge=20, le=120)) -> dict[str, Any]:
+    return market_service().get_index_history(code, days)
+
+
 @app.get("/api/stocks/{code}")
-def stock_detail(code: str, market: str = "", include_predictions: bool = True) -> dict[str, Any]:
+def stock_detail(
+    code: str,
+    market: str = "",
+    include_predictions: bool = True,
+    history_days: int = Query(120, ge=20, le=180),
+) -> dict[str, Any]:
     normalized, normalized_market = normalize_symbol(code, market)
-    detail = market_service().stock_detail(normalized, normalized_market)
+    detail = market_service().detail_with_window(normalized, normalized_market, history_days)
     detail["predictions"] = (
         prediction_service().prediction_for_detail(detail)["items"] if include_predictions else []
     )
@@ -85,9 +107,14 @@ def stock_detail(code: str, market: str = "", include_predictions: bool = True) 
 
 
 @app.get("/api/stocks/{code}/resolve")
-def resolve_stock(code: str, market: str = "", include_predictions: bool = True) -> dict[str, Any]:
+def resolve_stock(
+    code: str,
+    market: str = "",
+    include_predictions: bool = True,
+    history_days: int = Query(120, ge=20, le=180),
+) -> dict[str, Any]:
     normalized, normalized_market = normalize_symbol(code, market)
-    detail = market_service().resolve_stock(normalized, normalized_market)
+    detail = market_service().detail_with_window(normalized, normalized_market, history_days, resolve=True)
     detail["predictions"] = (
         prediction_service().prediction_for_detail(detail)["items"] if include_predictions else []
     )
@@ -106,19 +133,60 @@ def rankings(type: str = "gainers") -> dict[str, Any]:
     return market_service().ranking(type)
 
 
+@app.post("/api/analysis/compare")
+def compare_stocks(request: CompareRequest) -> dict[str, Any]:
+    return market_service().compare(
+        [symbol.model_dump() for symbol in request.symbols],
+        benchmark=request.benchmark,
+        window=request.window,
+    )
+
+
 @app.get("/api/news")
-def news(theme: str | None = None, q: str | None = None) -> dict[str, Any]:
-    return market_service().get_news(theme=theme, q=q)
+def news(
+    theme: str | None = None,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    return market_service().get_news(theme=theme, q=q, date_from=date_from, date_to=date_to)
 
 
 @app.get("/api/announcements")
-def announcements(code: str | None = None, q: str | None = None) -> dict[str, Any]:
-    return market_service().get_announcements(code=code, q=q)
+def announcements(
+    code: str | None = None,
+    q: str | None = None,
+    type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    return market_service().get_announcements(
+        code=code,
+        q=q,
+        announcement_type=type,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 @app.get("/api/predictions")
-def predictions(code: str | None = None, theme: str | None = None, horizon: int = Query(3, ge=1, le=5)) -> dict[str, Any]:
-    return prediction_service().predictions(code=code, theme=theme, horizon=horizon)
+def predictions(
+    code: str | None = None,
+    theme: str | None = None,
+    market: str = "",
+    horizon: int = Query(3, ge=1, le=5),
+    horizons: str | None = None,
+) -> dict[str, Any]:
+    parsed_horizons = None
+    if horizons:
+        parsed_horizons = [int(value) for value in horizons.split(",") if value.strip().isdigit()]
+    return prediction_service().predictions(
+        code=code,
+        theme=theme,
+        market=market,
+        horizon=horizon,
+        horizons=parsed_horizons,
+    )
 
 
 @app.get("/api/watchlist")

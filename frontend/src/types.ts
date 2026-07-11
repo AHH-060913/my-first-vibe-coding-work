@@ -151,6 +151,46 @@ export interface Overview {
   hot_sectors: Sector[];
   themes: ThemeMeta[];
   index_history?: HistoryPoint[];
+  market_temperature?: MarketTemperature;
+  change_distribution?: ChangeDistributionBucket[];
+}
+
+export interface MarketTemperature {
+  score: number;
+  label: string;
+  components: {
+    breadth: number;
+    momentum: number;
+    sector_strength: number;
+    activity: number;
+  };
+}
+
+export interface ChangeDistributionBucket {
+  label: string;
+  min: number | null;
+  max: number | null;
+  count: number;
+}
+
+export interface StockAnalytics {
+  return_5d: number | null;
+  return_20d: number | null;
+  return_60d: number | null;
+  annualized_volatility: number | null;
+  max_drawdown: number | null;
+  price_position: number | null;
+  amount_change_5d: number | null;
+  sample_size: number;
+}
+
+export interface StockEvent {
+  kind: "news" | "announcement";
+  title: string;
+  published_at: string;
+  source: string;
+  url: string;
+  type: string;
 }
 
 export interface ListResponse<T> {
@@ -170,6 +210,71 @@ export interface StockDetail {
   news: NewsItem[];
   announcements: Announcement[];
   predictions: Prediction[];
+  analytics?: StockAnalytics;
+  events?: StockEvent[];
   source: string;
   updated_at: string;
+}
+
+export interface IndexHistoryResponse extends ListResponse<HistoryPoint> {
+  code: string;
+  stale?: boolean;
+}
+
+export interface CompareSymbol {
+  code: string;
+  market?: string;
+}
+
+export interface CompareSeries {
+  code: string;
+  market: string;
+  name: string;
+  values: Array<{ date: string; value: number }>;
+}
+
+export interface CompareMetric {
+  code: string;
+  market: string;
+  name: string;
+  return_pct: number;
+  excess_return_pct: number;
+  annualized_volatility: number | null;
+  max_drawdown: number | null;
+  correlation_to_benchmark: number | null;
+  amount: number;
+  pe: number;
+  pb: number;
+}
+
+export interface CompareResponse {
+  window: number;
+  benchmark: {
+    code: string;
+    name: string;
+    values: Array<{ date: string; value: number }>;
+  };
+  series: CompareSeries[];
+  metrics: CompareMetric[];
+  correlation: {
+    labels: string[];
+    values: Array<Array<number | null>>;
+  };
+  source: string;
+  updated_at: string;
+  stale: boolean;
+}
+
+export interface ResearchNote {
+  code: string;
+  market: string;
+  text: string;
+  tags: string[];
+  updated_at: string;
+}
+
+export interface WatchGroup {
+  id: string;
+  name: string;
+  codes: string[];
 }

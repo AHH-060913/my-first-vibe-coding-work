@@ -2,6 +2,8 @@
 
 一个中文 A 股个人投研看板，也是我的第一个 vibe coding 作品。项目覆盖大盘指数、科技/新能源/显示/光伏主题、个股行情、涨跌排行、热门板块、财经新闻、公司公告、自选股、在线股票搜索和 1/3/5 个交易日量化评分。
 
+V2 使用苹果式极简工作台设计，新增市场温度、涨跌分布、行业热力图、独立个股详情、多股基准对比、技术指标、事件时间轴以及浏览器本地研究笔记。
+
 量化预测只展示上涨概率、跑赢概率、置信度、因子贡献和风险提示，不展示买入/卖出建议。结果仅供研究，不构成投资建议。
 
 ## 在线展示
@@ -18,11 +20,15 @@ https://ahh-060913.github.io/my-first-vibe-coding-work/
 ## 核心功能
 
 - 大盘指数、市场宽度、成交额、热门板块。
+- 市场温度、涨跌分布、行业成交额热力图和指数 20/60/120 日切换。
 - 科技、新能源、显示、光伏主题行业页。
 - 个股行情表、涨跌排行、成交额排行、换手率排行、量比排行、模型评分榜。
 - 在线搜索股票代码或名称，搜索结果可添加到浏览器本地样本池。
 - 新增股票会进入个股页、排行、模型预测和自选股视图；样本池保存在 `localStorage:a-share-sample-pool`。
-- 股票名称可点击打开详情，展示行情、K 线、公司背景、主营业务、相关新闻、公告和预测评分。
+- 股票名称可点击进入可分享的 Hash 详情页，展示 K 线、成交量、MA5/10/20、MACD、RSI、公司背景、事件时间轴和多周期预测。
+- 2-5 只股票与沪深300进行归一化收益、超额收益、风险收益和相关性比较。
+- 自选股分组、标签和研究笔记保存在当前浏览器，不写入公开共享后端。
+- Render 冷启动期间先展示明确标注的演示/缓存数据，云端返回后平滑替换。
 - 数据返回 `source`、`updated_at`、`stale`，数据源失败时展示最近可用数据。
 
 ## 技术栈
@@ -88,15 +94,17 @@ npm run build
 
 - `GET /api/health`
 - `GET /api/market/overview`
+- `GET /api/market/indices/{code}/history?days=20|60|120`
 - `GET /api/stocks`
 - `GET /api/stocks/{code}`
 - `GET /api/stocks/{code}/resolve`
 - `GET /api/search/stocks?q=`
 - `GET /api/sectors?theme=tech|new_energy|display|pv`
 - `GET /api/rankings?type=gainers|losers|turnover|volume_ratio|hot_sector|model_score`
+- `POST /api/analysis/compare`
 - `GET /api/news`
 - `GET /api/announcements`
-- `GET /api/predictions?code=&theme=&horizon=1|3|5`
+- `GET /api/predictions?code=&theme=&horizon=1|3|5&horizons=1,3,5`
 - `GET /api/watchlist`
 - `POST /api/watchlist`
 - `DELETE /api/watchlist/{code}`
@@ -108,6 +116,7 @@ cd backend
 .\.venv\Scripts\python -m pytest
 
 cd ..\frontend
+npm test
 npm run build
 $env:VITE_STATIC_DEMO="true"; npm run build:static
 ```

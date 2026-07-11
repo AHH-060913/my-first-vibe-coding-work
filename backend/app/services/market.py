@@ -7,6 +7,14 @@ from .. import database
 from ..config import get_settings
 from ..seed import THEMES
 from .akshare_client import AkshareClient
+from .analytics import (
+    build_events,
+    change_distribution,
+    comparison_payload,
+    market_temperature,
+    slice_history,
+    stock_analytics,
+)
 from .providers import FreeMarketProvider, normalize_code, normalize_symbol
 
 
@@ -94,13 +102,26 @@ class MarketService:
             "breadth": {"up": up_count, "down": down_count, "flat": flat_count, "total": len(stocks)},
             "total_amount": total_amount,
             "hot_sectors": hot_sectors,
+            "market_temperature": market_temperature(stocks, sectors),
+            "change_distribution": change_distribution(stocks),
             "themes": [{"key": key, **value} for key, value in THEMES.items()],
+        }
+
+    def get_index_history(self, code: str, days: int = 60) -> dict[str, Any]:
+        rows, source, updated_at = self.index_history(code)
+        return {
+            "code": normalize_code(code),
+            "items": slice_history(rows, days),
+            "source": source,
+            "updated_at": updated_at,
+            "stale": source.startswith("seed") or "stale-cache" in source,
         }
 
     def get_stocks(
         self,
         q: str | None = None,
         theme: str | None = None,
+        sector: str | None = None,
         sort: str = "change_pct",
         order: str = "desc",
         page: int = 1,
@@ -113,6 +134,9 @@ class MarketService:
             filtered = [item for item in filtered if q_lower in item.get("code", "").lower() or q_lower in item.get("name", "").lower()]
         if theme:
             filtered = [item for item in filtered if item.get("theme") == theme]
+        if sector:
+            sector_lower = sector.strip().lower()
+            filtered = [item for item in filtered if sector_lower == str(item.get("sector", "")).lower()]
         reverse = order.lower() != "asc"
         filtered = sorted(filtered, key=lambda item: _sort_value(item, sort), reverse=reverse)
         total = len(filtered)
@@ -170,6 +194,8 @@ class MarketService:
             "profile": profile,
             "news": related_news,
             "announcements": related_announcements,
+            "events": build_events(related_news, related_announcements),
+            "analytics": stock_analytics(history),
             "source": f"{quote_source}; {history_source}; {profile_source}",
             "updated_at": quote.get("updated_at") or now_iso(),
         }
@@ -205,11 +231,47 @@ class MarketService:
             "profile": profile,
             "news": related_news,
             "announcements": related_announcements,
+            "events": build_events(related_news, related_announcements),
+            "analytics": stock_analytics(history),
             "source": f"{source}; {history_source}; {profile_source}",
             "updated_at": updated_at,
         }
         payload["quote"]["source"] = payload["quote"].get("source") or source
         return payload
+
+    def detail_with_window(self, code: str, market: str = "", history_days: int = 120, resolve: bool = False) -> dict[str, Any]:
+        detail = self.resolve_stock(code, market) if resolve else self.stock_detail(code, market)
+        payload = dict(detail)
+        full_history = detail.get("history") or []
+        payload["history"] = slice_history(full_history, history_days)
+        payload["analytics"] = stock_analytics(full_history)
+        payload["events"] = detail.get("events") or build_events(
+            detail.get("news") or [], detail.get("announcements") or []
+        )
+        return payload
+
+    def compare(self, symbols: list[dict[str, str]], benchmark: str = "000300", window: int = 60) -> dict[str, Any]:
+        details: list[dict[str, Any]] = []
+        sources: list[str] = []
+        updated_values: list[str] = []
+        for symbol in symbols:
+            code, market = normalize_symbol(symbol.get("code", ""), symbol.get("market", ""))
+            detail = self.stock_detail(code, market)
+            details.append(detail)
+            sources.append(str(detail.get("source", "")))
+            updated_values.append(str(detail.get("updated_at", "")))
+        benchmark_history, benchmark_source, benchmark_updated = self.index_history(benchmark)
+        result = comparison_payload(details, benchmark_history, normalize_code(benchmark), window)
+        sources.append(benchmark_source)
+        updated_values.append(benchmark_updated)
+        result.update(
+            {
+                "source": "; ".join(source for source in sources if source),
+                "updated_at": max((value for value in updated_values if value), default=now_iso()),
+                "stale": any(source.startswith("seed") or "stale-cache" in source for source in sources),
+            }
+        )
+        return result
 
     def get_sectors(self, theme: str | None = None) -> dict[str, Any]:
         rows, source, updated_at = self.sectors()
@@ -233,7 +295,13 @@ class MarketService:
             items = sorted(stocks, key=lambda item: item.get("change_pct") or 0, reverse=True)[:30]
         return {"type": ranking_type, "items": items, "source": source, "updated_at": updated_at}
 
-    def get_news(self, theme: str | None = None, q: str | None = None) -> dict[str, Any]:
+    def get_news(
+        self,
+        theme: str | None = None,
+        q: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
         rows, source, updated_at = self.news()
         filtered = rows
         if theme:
@@ -241,9 +309,17 @@ class MarketService:
         if q:
             q_lower = q.lower()
             filtered = [item for item in filtered if q_lower in item.get("title", "").lower()]
+        filtered = _filter_dates(filtered, date_from, date_to)
         return {"items": filtered[:80], "source": source, "updated_at": updated_at}
 
-    def get_announcements(self, code: str | None = None, q: str | None = None) -> dict[str, Any]:
+    def get_announcements(
+        self,
+        code: str | None = None,
+        q: str | None = None,
+        announcement_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
         rows, source, updated_at = self.announcements()
         filtered = rows
         if code:
@@ -251,6 +327,10 @@ class MarketService:
         if q:
             q_lower = q.lower()
             filtered = [item for item in filtered if q_lower in item.get("title", "").lower() or q_lower in item.get("name", "").lower()]
+        if announcement_type:
+            type_lower = announcement_type.lower()
+            filtered = [item for item in filtered if type_lower in str(item.get("type", "")).lower()]
+        filtered = _filter_dates(filtered, date_from, date_to)
         return {"items": filtered[:80], "source": source, "updated_at": updated_at}
 
 
@@ -274,3 +354,19 @@ def _mark_stale(payload: Any, stale: bool) -> Any:
             marked.setdefault("stale", stale)
         return marked
     return payload
+
+
+def _filter_dates(
+    rows: list[dict[str, Any]], date_from: str | None, date_to: str | None
+) -> list[dict[str, Any]]:
+    if not date_from and not date_to:
+        return rows
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = str(row.get("published_at", ""))[:10]
+        if date_from and value and value < date_from:
+            continue
+        if date_to and value and value > date_to:
+            continue
+        result.append(row)
+    return result

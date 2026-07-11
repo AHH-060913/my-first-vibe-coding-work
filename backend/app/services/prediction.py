@@ -44,8 +44,15 @@ class PredictionService:
     def __init__(self, market: MarketService | None = None) -> None:
         self.market = market or MarketService()
 
-    def predictions(self, code: str | None = None, theme: str | None = None, horizon: int = 3, market: str = "") -> dict[str, Any]:
-        horizon = horizon if horizon in {1, 3, 5} else 3
+    def predictions(
+        self,
+        code: str | None = None,
+        theme: str | None = None,
+        horizon: int = 3,
+        market: str = "",
+        horizons: list[int] | None = None,
+    ) -> dict[str, Any]:
+        selected_horizons = sorted({item for item in (horizons or [horizon]) if item in {1, 3, 5}}) or [3]
         stocks_payload = self.market.get_stocks(theme=theme, page_size=80, sort="amount")
         stocks = stocks_payload["items"]
         if code:
@@ -54,14 +61,24 @@ class PredictionService:
             candidate = detail["quote"]
             if not any(item["code"] == candidate["code"] for item in stocks):
                 stocks = [candidate] + stocks
-            results = [self._predict_stock(candidate, horizon, detail["history"]).as_dict()]
+            results = [
+                self._predict_stock(candidate, selected_horizon, detail["history"]).as_dict()
+                for selected_horizon in selected_horizons
+            ]
         else:
-            results = [self._predict_stock(stock, horizon).as_dict() for stock in stocks[:40]]
-            results = sorted(results, key=lambda item: (item["excess_probability"], item["up_probability"]), reverse=True)
-        for item in results[:10]:
+            results = [
+                self._predict_stock(stock, selected_horizon).as_dict()
+                for selected_horizon in selected_horizons
+                for stock in stocks[:40]
+            ]
+            results = sorted(
+                results,
+                key=lambda item: (item["horizon"], -item["excess_probability"], -item["up_probability"]),
+            )
+        for item in results[:30]:
             database.save_prediction(item["code"], item["horizon"], item)
         return {
-            "items": results[:40],
+            "items": results[:120],
             "source": "local:hist_gradient_boosting_or_factor_fallback",
             "updated_at": stocks_payload["updated_at"],
         }
