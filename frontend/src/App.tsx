@@ -300,40 +300,75 @@ export default function App() {
   const selectedThemeName = theme ? themeLabels[theme] : "全市场";
   const freshness = overview?.updated_at || stocks?.updated_at || sectors?.updated_at;
   const source = overview?.source || stocks?.source || "未连接";
+  const sourceState = source === "未连接" ? "正在连接" : source.includes("seed") ? "缓存可用" : "数据在线";
+
+  useEffect(() => {
+    let observer: IntersectionObserver | undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const root = document.querySelector(".pageStage");
+      if (!root) return;
+      const targets = root.querySelectorAll<HTMLElement>(
+        ".metricCard, .panel, .detailPanel, .sectorCard, .predictionCard, .compareCard, .compareProfiles article, .feedItem"
+      );
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add("isVisible");
+            observer?.unobserve(entry.target);
+          });
+        },
+        { threshold: 0.08, rootMargin: "0px 0px -6% 0px" }
+      );
+      targets.forEach((target, index) => {
+        target.classList.add("revealItem");
+        target.style.setProperty("--reveal-delay", `${Math.min(index, 8) * 42}ms`);
+        if (reducedMotion) target.classList.add("isVisible");
+        else observer?.observe(target);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [compareDetails.length, detail?.quote.code, loading, section, theme]);
 
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brandMark">A</div>
-          <div>
-            <strong>我的第一个vibe coding作品</strong>
-            <span>A股个人投研看板</span>
+      <header className="globalNav">
+        <div className="navInner">
+          <button className="brand" onClick={() => setSection("overview")} aria-label="返回市场总览">
+            <span className="brandMark">A</span>
+            <span className="brandText"><strong>Vibe 投研</strong><small>我的第一个作品</small></span>
+          </button>
+          <nav className="primaryNav" aria-label="主要导航">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button key={item.key} className={section === item.key ? "active" : ""} onClick={() => setSection(item.key)}>
+                  <Icon size={15} />
+                  <span>{item.label}</span>
+                  {item.key === "compare" && <small className="navCount">{compareKeys.length}</small>}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="dataStatus" title={source}>
+            <Database size={14} />
+            <span className={source === "未连接" ? "statusDot waiting" : "statusDot"} />
+            <span>{sourceState}</span>
           </div>
         </div>
-        <nav>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button key={item.key} className={section === item.key ? "active" : ""} onClick={() => setSection(item.key)}>
-                <Icon size={18} />
-                <span>{item.label}</span>
-                {item.key === "compare" && <small className="navCount">{compareKeys.length}</small>}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="sidebarFoot">
-          <Database size={16} />
-          <span>{source}</span>
-        </div>
-      </aside>
+        {loading && <div className="loadProgress" />}
+      </header>
 
       <main className="main">
         <header className="topbar">
-          <div>
+          <div className="titleBlock">
+            <span className="eyebrow">A-SHARE RESEARCH</span>
             <h1>{sectionTitle(section)}</h1>
-            <p>我的第一个vibe coding作品 · {selectedThemeName} · 更新时间 {formatDateTime(freshness)}</p>
+            <p>{selectedThemeName} · 更新于 {formatDateTime(freshness)}</p>
           </div>
           <div className="toolbar">
             <label className="searchBox">
@@ -344,7 +379,7 @@ export default function App() {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") runOnlineSearch();
                 }}
-                placeholder="搜索任意A股代码或名称"
+                placeholder="搜索股票代码或名称"
               />
             </label>
             <button className="searchAction" onClick={runOnlineSearch} disabled={searching}>
@@ -375,89 +410,93 @@ export default function App() {
         )}
         {searchMessage && <div className="searchResults emptySearch">{searchMessage}</div>}
 
-        <div className="notice">
-          <ShieldAlert size={16} />
-          <span>量化预测仅用于研究展示，不构成投资建议；免费数据源可能存在延迟、缺失或临时失效。</span>
-        </div>
-
-        <div className="themeRow">
-          <button className={!theme ? "selected" : ""} onClick={() => setTheme("")}>
-            全市场
-          </button>
-          {themes.map((item) => (
-            <button key={item.key} className={theme === item.key ? "selected" : ""} onClick={() => setTheme(item.key)}>
-              {item.label}
+        <div className="controlBar">
+          <div className="themeRow" aria-label="主题筛选">
+            <button className={!theme ? "selected" : ""} aria-pressed={!theme} onClick={() => setTheme("")}>
+              全市场
             </button>
-          ))}
+            {themes.map((item) => (
+              <button key={item.key} className={theme === item.key ? "selected" : ""} aria-pressed={theme === item.key} onClick={() => setTheme(item.key)}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="notice">
+            <ShieldAlert size={15} />
+            <span>研究展示，不构成投资建议</span>
+          </div>
         </div>
 
         {error && <div className="error">{error}</div>}
-        <ErrorBoundary key={`${section}-${selectedMarket}-${selectedCode}`}>
-          {section === "overview" && (
-            <OverviewPage
-              overview={overview}
-              stocks={displayStocks}
-              sectors={overview?.hot_sectors ?? sectors?.items ?? []}
-              onSelectStock={handleSelectStock}
-              compareKeys={compareKeys}
-              onToggleCompare={toggleCompare}
-            />
-          )}
-          {section === "sectors" && (
-            <SectorsPage sectors={sectors?.items ?? []} stocks={displayStocks} onSelectStock={handleSelectStock} compareKeys={compareKeys} onToggleCompare={toggleCompare} />
-          )}
-          {section === "stocks" && (
-            <StocksPage
-              stocks={displayStocks}
-              detail={detail}
-              watchCodes={watchlist?.codes ?? []}
-              onSelectStock={handleSelectStock}
-              compareKeys={compareKeys}
-              onToggleCompare={toggleCompare}
-              onAddWatch={async (code) => {
-                await api.addWatch(code);
-                setWatchlist(await api.watchlist());
-              }}
-              onRemoveWatch={async (code) => {
-                await api.removeWatch(code);
-                setWatchlist(await api.watchlist());
-              }}
-            />
-          )}
-          {section === "compare" && (
-            <ComparePage
-              details={compareDetails}
-              candidates={displayStocks}
-              compareKeys={compareKeys}
-              loading={compareLoading}
-              message={compareMessage}
-              onToggleCompare={toggleCompare}
-              onSelectStock={handleSelectStock}
-            />
-          )}
-          {section === "rankings" && (
-            <RankingsPage
-              rankingType={rankingType}
-              setRankingType={setRankingType}
-              rankings={displayRankings}
-              onSelectStock={handleSelectStock}
-              compareKeys={compareKeys}
-              onToggleCompare={toggleCompare}
-            />
-          )}
-          {section === "news" && <NewsPage news={news?.items ?? []} announcements={announcements?.items ?? []} />}
-          {section === "predictions" && <PredictionsPage horizon={horizon} setHorizon={setHorizon} predictions={displayPredictions} onSelectStock={handleSelectStock} />}
-          {section === "watchlist" && (
-            <WatchlistPage
-              stocks={displayWatchlist}
-              codes={[...(watchlist?.codes ?? []), ...poolStocks.map((item) => item.code)]}
-              onSelectStock={handleSelectStock}
-              compareKeys={compareKeys}
-              onToggleCompare={toggleCompare}
-            />
-          )}
-        </ErrorBoundary>
+        <div className="pageStage" key={`${section}-${theme}`}>
+          <ErrorBoundary key={`${section}-${selectedMarket}-${selectedCode}`}>
+            {section === "overview" && (
+              <OverviewPage
+                overview={overview}
+                stocks={displayStocks}
+                sectors={overview?.hot_sectors ?? sectors?.items ?? []}
+                onSelectStock={handleSelectStock}
+                compareKeys={compareKeys}
+                onToggleCompare={toggleCompare}
+              />
+            )}
+            {section === "sectors" && (
+              <SectorsPage sectors={sectors?.items ?? []} stocks={displayStocks} onSelectStock={handleSelectStock} compareKeys={compareKeys} onToggleCompare={toggleCompare} />
+            )}
+            {section === "stocks" && (
+              <StocksPage
+                stocks={displayStocks}
+                detail={detail}
+                watchCodes={watchlist?.codes ?? []}
+                onSelectStock={handleSelectStock}
+                compareKeys={compareKeys}
+                onToggleCompare={toggleCompare}
+                onAddWatch={async (code) => {
+                  await api.addWatch(code);
+                  setWatchlist(await api.watchlist());
+                }}
+                onRemoveWatch={async (code) => {
+                  await api.removeWatch(code);
+                  setWatchlist(await api.watchlist());
+                }}
+              />
+            )}
+            {section === "compare" && (
+              <ComparePage
+                details={compareDetails}
+                candidates={displayStocks}
+                compareKeys={compareKeys}
+                loading={compareLoading}
+                message={compareMessage}
+                onToggleCompare={toggleCompare}
+                onSelectStock={handleSelectStock}
+              />
+            )}
+            {section === "rankings" && (
+              <RankingsPage
+                rankingType={rankingType}
+                setRankingType={setRankingType}
+                rankings={displayRankings}
+                onSelectStock={handleSelectStock}
+                compareKeys={compareKeys}
+                onToggleCompare={toggleCompare}
+              />
+            )}
+            {section === "news" && <NewsPage news={news?.items ?? []} announcements={announcements?.items ?? []} />}
+            {section === "predictions" && <PredictionsPage horizon={horizon} setHorizon={setHorizon} predictions={displayPredictions} onSelectStock={handleSelectStock} />}
+            {section === "watchlist" && (
+              <WatchlistPage
+                stocks={displayWatchlist}
+                codes={[...(watchlist?.codes ?? []), ...poolStocks.map((item) => item.code)]}
+                onSelectStock={handleSelectStock}
+                compareKeys={compareKeys}
+                onToggleCompare={toggleCompare}
+              />
+            )}
+          </ErrorBoundary>
+        </div>
       </main>
+      <footer className="siteFooter"><span>Vibe 投研 · A股研究工作台</span><span>数据仅供研究参考</span></footer>
     </div>
   );
 }
@@ -490,6 +529,33 @@ function DeferredComparisonLineChart({ details, days, height = 360 }: { details:
   );
 }
 
+function AnimatedNumber({ value, digits = 0 }: { value: number; digits?: number }) {
+  const previous = useRef(0);
+  const [display, setDisplay] = useState(0);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      previous.current = value;
+      setDisplay(value);
+      return;
+    }
+    const from = previous.current;
+    const startedAt = window.performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / 820);
+      const eased = 1 - ((1 - progress) ** 4);
+      setDisplay(from + ((value - from) * eased));
+      if (progress < 1) frame = window.requestAnimationFrame(tick);
+      else previous.current = value;
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [value]);
+
+  return <>{display.toFixed(digits)}</>;
+}
+
 function OverviewPage({
   overview,
   stocks,
@@ -514,7 +580,7 @@ function OverviewPage({
         {(overview?.indices ?? []).map((item) => (
           <article key={item.code} className="metricCard">
             <span>{item.name}</span>
-            <strong>{item.price.toFixed(2)}</strong>
+            <strong><AnimatedNumber value={item.price} digits={2} /></strong>
             <em className={item.change_pct >= 0 ? "up" : "down"}>{formatPct(item.change_pct)}</em>
           </article>
         ))}
@@ -527,19 +593,19 @@ function OverviewPage({
         </div>
         <div className="breadth">
           <div>
-            <strong>{breadth.up}</strong>
+            <strong><AnimatedNumber value={breadth.up} /></strong>
             <span>上涨</span>
           </div>
           <div>
-            <strong>{breadth.down}</strong>
+            <strong><AnimatedNumber value={breadth.down} /></strong>
             <span>下跌</span>
           </div>
           <div>
-            <strong>{breadth.flat}</strong>
+            <strong><AnimatedNumber value={breadth.flat} /></strong>
             <span>平盘</span>
           </div>
           <div>
-            <strong>{breadth.total}</strong>
+            <strong><AnimatedNumber value={breadth.total} /></strong>
             <span>样本</span>
           </div>
         </div>
@@ -657,9 +723,9 @@ function StocksPage({
               </div>
               <strong className={num(detail.quote.change_pct) >= 0 ? "up" : "down"}>{formatPct(num(detail.quote.change_pct))}</strong>
             </div>
-            <DeferredLineChart data={detail.history ?? []} height={240} color="#8a5a00" />
+            <DeferredLineChart data={detail.history ?? []} height={240} color="#0071e3" />
             <div className="quoteStats">
-              <span>最新价 <b>{formatNumber(detail.quote.price, 2)}</b></span>
+              <span>最新价 <b><AnimatedNumber value={num(detail.quote.price)} digits={2} /></b></span>
               <span>成交额 <b>{formatAmount(num(detail.quote.amount))}</b></span>
               <span>换手率 <b>{formatPct(num(detail.quote.turnover_rate))}</b></span>
               <span>量比 <b>{formatNumber(detail.quote.volume_ratio, 2)}</b></span>
@@ -756,7 +822,7 @@ function ComparePage({
                 <article key={stockKey(item.quote)} className="compareCard">
                   <button className="nameButton" onClick={() => onSelectStock(item.quote.code, item.quote.market)}>{item.quote.name}</button>
                   <span>{item.quote.market || inferMarket(item.quote.code)} · {item.quote.code}</span>
-                  <strong>{formatNumber(item.quote.price, 2)}</strong>
+                  <strong><AnimatedNumber value={num(item.quote.price)} digits={2} /></strong>
                   <div>
                     <em className={num(item.quote.change_pct) >= 0 ? "up" : "down"}>今日 {formatPct(num(item.quote.change_pct))}</em>
                     <em className={(stats?.periodReturn ?? 0) >= 0 ? "up" : "down"}>{days}日 {formatPct(stats?.periodReturn ?? 0)}</em>
