@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
 
 from .. import database
@@ -19,6 +21,9 @@ from .analytics import (
 from .providers import FreeMarketProvider, normalize_code, normalize_symbol
 
 
+_CACHE_LOCKS: defaultdict[str, Lock] = defaultdict(Lock)
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -30,27 +35,28 @@ class MarketService:
         self.ttl = get_settings().cache_ttl_seconds
 
     def _cached(self, key: str, loader, ttl_seconds: int | None = None):
-        ttl = self.ttl if ttl_seconds is None else ttl_seconds
-        cached = database.get_cache(key)
-        if cached:
-            try:
-                updated = datetime.fromisoformat(cached["updated_at"])
-                age = (datetime.now(timezone.utc) - updated).total_seconds()
-                if age <= ttl:
-                    return cached["payload"], cached["source"], cached["updated_at"]
-            except ValueError:
-                pass
-        try:
-            payload, source = loader()
-        except Exception:
+        with _CACHE_LOCKS[key]:
+            ttl = self.ttl if ttl_seconds is None else ttl_seconds
+            cached = database.get_cache(key)
             if cached:
-                payload = _mark_stale(cached["payload"], True)
-                return payload, f"{cached['source']}; stale-cache", cached["updated_at"]
-            raise
-        payload = _mark_stale(payload, source.startswith("seed"))
-        database.set_cache(key, payload, source)
-        fresh = database.get_cache(key)
-        return fresh["payload"], fresh["source"], fresh["updated_at"]
+                try:
+                    updated = datetime.fromisoformat(cached["updated_at"])
+                    age = (datetime.now(timezone.utc) - updated).total_seconds()
+                    if age <= ttl:
+                        return cached["payload"], cached["source"], cached["updated_at"]
+                except ValueError:
+                    pass
+            try:
+                payload, source = loader()
+            except Exception:
+                if cached:
+                    payload = _mark_stale(cached["payload"], True)
+                    return payload, f"{cached['source']}; stale-cache", cached["updated_at"]
+                raise
+            payload = _mark_stale(payload, source.startswith("seed"))
+            database.set_cache(key, payload, source)
+            fresh = database.get_cache(key)
+            return fresh["payload"], fresh["source"], fresh["updated_at"]
 
     def stocks(self) -> tuple[list[dict[str, Any]], str, str]:
         return self._cached("stocks:spot", self.client.stock_spot)

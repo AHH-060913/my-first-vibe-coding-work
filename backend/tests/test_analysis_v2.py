@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from time import sleep
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.analytics import change_distribution, market_temperature, stock_analytics
+from app.services.market import MarketService
 
 
 client = TestClient(app)
@@ -22,6 +28,26 @@ def test_market_derivatives_are_deterministic() -> None:
     assert sum(bucket["count"] for bucket in distribution) == len(stocks)
     assert 0 <= temperature["score"] <= 100
     assert set(temperature["components"]) == {"breadth", "momentum", "sector_strength", "activity"}
+
+
+def test_cache_loader_is_single_flight_per_key() -> None:
+    service = MarketService()
+    call_lock = Lock()
+    calls = 0
+
+    def loader():
+        nonlocal calls
+        with call_lock:
+            calls += 1
+        sleep(0.05)
+        return [{"value": 1}], "fake:single-flight"
+
+    key = f"test:single-flight:{uuid4()}"
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: service._cached(key, loader), range(2)))
+
+    assert calls == 1
+    assert results[0][0] == results[1][0]
 
 
 def test_stock_analytics_only_uses_available_history() -> None:
@@ -49,6 +75,9 @@ def test_v2_overview_detail_and_index_history() -> None:
     assert len(detail_data["history"]) <= 60
     assert detail_data["analytics"]["sample_size"] >= len(detail_data["history"])
     assert isinstance(detail_data["events"], list)
+
+    detail_with_predictions = client.get("/api/stocks/300750", params={"history_days": 60})
+    assert {item["horizon"] for item in detail_with_predictions.json()["predictions"]} == {1, 3, 5}
 
     history = client.get("/api/market/indices/000300/history", params={"days": 20})
     assert history.status_code == 200

@@ -67,7 +67,7 @@ $env:A_DASHBOARD_DATA_MODE="seed"
 
 ```powershell
 $env:A_DASHBOARD_DATA_MODE="auto"
-$env:A_DASHBOARD_LIVE_TIMEOUT="4"
+$env:A_DASHBOARD_LIVE_TIMEOUT="3"
 ```
 
 仅使用 AKShare，失败则报错：

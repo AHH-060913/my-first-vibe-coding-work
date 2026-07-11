@@ -58,9 +58,21 @@ def prediction_service() -> PredictionService:
     return _prediction_service
 
 
+def detail_predictions(detail: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        prediction_service().prediction_for_detail(detail, horizon)["items"][0]
+        for horizon in (1, 3, 5)
+    ]
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "data_mode": settings.data_mode, "app": settings.app_name}
+    return {
+        "status": "ok",
+        "data_mode": settings.data_mode,
+        "live_timeout_seconds": settings.live_fetch_timeout_seconds,
+        "app": settings.app_name,
+    }
 
 
 @app.get("/api/market/overview")
@@ -100,9 +112,7 @@ def stock_detail(
 ) -> dict[str, Any]:
     normalized, normalized_market = normalize_symbol(code, market)
     detail = market_service().detail_with_window(normalized, normalized_market, history_days)
-    detail["predictions"] = (
-        prediction_service().prediction_for_detail(detail)["items"] if include_predictions else []
-    )
+    detail["predictions"] = detail_predictions(detail) if include_predictions else []
     return detail
 
 
@@ -115,9 +125,7 @@ def resolve_stock(
 ) -> dict[str, Any]:
     normalized, normalized_market = normalize_symbol(code, market)
     detail = market_service().detail_with_window(normalized, normalized_market, history_days, resolve=True)
-    detail["predictions"] = (
-        prediction_service().prediction_for_detail(detail)["items"] if include_predictions else []
-    )
+    detail["predictions"] = detail_predictions(detail) if include_predictions else []
     return detail
 
 
