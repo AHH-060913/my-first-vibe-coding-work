@@ -132,8 +132,10 @@ class PredictionService:
         if len(history) < 90:
             return None
         try:
-            from sklearn.ensemble import HistGradientBoostingClassifier
+            from sklearn.linear_model import LogisticRegression
             from sklearn.metrics import accuracy_score, roc_auc_score
+            from sklearn.pipeline import make_pipeline
+            from sklearn.preprocessing import StandardScaler
         except Exception:
             return None
         df = pd.DataFrame(history).copy()
@@ -161,7 +163,10 @@ class PredictionService:
         test = model_df.iloc[split:]
         if test.empty or train["label"].nunique() < 2:
             return None
-        clf = HistGradientBoostingClassifier(max_iter=90, learning_rate=0.06, max_leaf_nodes=15, random_state=42)
+        clf = make_pipeline(
+            StandardScaler(),
+            LogisticRegression(max_iter=120, solver="liblinear", random_state=42),
+        )
         clf.fit(train[feature_cols], train["label"])
         test_proba = clf.predict_proba(test[feature_cols])[:, 1]
         latest_proba = float(clf.predict_proba(model_df[feature_cols].tail(1))[:, 1][0])
@@ -179,7 +184,7 @@ class PredictionService:
             "top_n_excess_return": round((latest_proba - 0.5) * 0.18, 4),
             "anti_leakage": "features use only t and earlier values; labels use future returns after split",
         }
-        return {"probability": _clip(latest_proba), "metrics": metrics, "model": "HistGradientBoostingClassifier"}
+        return {"probability": _clip(latest_proba), "metrics": metrics, "model": "LogisticRegression"}
 
     def _factor_probability(self, stock: dict[str, Any], horizon: int) -> float:
         change = float(stock.get("change_pct") or 0)
